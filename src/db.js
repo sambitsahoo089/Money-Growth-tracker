@@ -1,3 +1,7 @@
+/*
+ * Freebuff — Habit-Driven Wealth Builder
+ * © 2026 sambitsahoo089 · github.com/sambitsahoo089
+ */
 'use strict';
 
 const { DatabaseSync } = require('node:sqlite');
