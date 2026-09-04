@@ -74,17 +74,86 @@ and 401(k) balances, etc.) — no Lorem Ipsum or `$1` filler. Money is stored as
 integer **cents** to avoid floating-point drift, and client-side SVGs are
 hand-drawn (no chart-library dependency).
 
-## Architecture
+## Code structure
 
+Request flow: the browser loads the SPA from `public/`; every interaction calls a
+REST endpoint under `/api/*`, which `server.js` routes into `src/routes/`; routes
+read/write the SQLite database created by `src/db.js`. There is no build step.
+
+```text
+freebuff-desktop/
+├── server.js                     # Express entry point (see below)
+├── package.json                  # Dependencies + npm scripts (start / dev / seed)
+├── package-lock.json             # Locked dependency versions
+├── README.md                     # This file
+├── .gitignore                    # Excludes node_modules/, data/, .freebuff/, logs
+│
+├── src/                          # ── BACKEND ────────────────────────────
+│   ├── db.js                     # SQLite schema, money helpers, seed data
+│   ├── helpers.js                # Shared constants + validation functions
+│   ├── middleware.js             # Auth guards, CSRF check, login rate limit
+│   ├── analytics.js              # Net worth series & monthly aggregates
+│   └── routes/                   # ── API route handlers (one per module) ──
+│       ├── auth.js               # POST register/login/logout, GET me
+│       ├── user.js               # Profile, password change, feedback submit
+│       ├── dashboard.js          # Aggregations for the home dashboard
+│       ├── expenses.js           # Expense + income-source CRUD, monthly view
+│       ├── habits.js             # Habit CRUD, completion toggles, streaks
+│       ├── goals.js              # Savings-goal CRUD + contributions
+│       ├── wealth.js             # Asset CRUD + net-worth/allocation data
+│       └── admin.js              # Platform metrics, users, feedback inbox
+│
+├── public/                       # ── FRONTEND (SPA, no build step) ────────
+│   ├── index.html                # Single page shell that loads all JS below
+│   ├── css/
+│   │   └── styles.css            # Entire dark, responsive design system
+│   └── js/
+│       ├── api.js                # Fetch wrapper (JSON, errors, 401 redirect)
+│       ├── ui.js                 # Toasts, modals, money/date formats, icons
+│       ├── charts.js             # Hand-drawn SVG charts (line/bar/donut)
+│       ├── router.js             # Hash router, app shell, sidebar, boot logic
+│       └── pages/                # ── One file per screen ─────────────────
+│           ├── auth.js           # Login page (Client vs Admin role selector)
+│           ├── dashboard.js      # Home dashboard
+│           ├── expenses.js       # Expense Tracker (+ income tab, CSV export)
+│           ├── habits.js         # Habit Tracker
+│           ├── goals.js          # Savings Goals
+│           ├── wealth.js         # Wealth Analytics
+│           └── admin.js          # Admin Panel
+│
+└── data/                         # ── Generated at runtime (gitignored) ──
+    ├── freebuff.db               # SQLite database, auto-created & seeded
+    └── session-secret            # Cookie-signing secret, generated on first run
 ```
-server.js            Express app, sessions, static SPA serving
-src/db.js            node:sqlite schema + idempotent seed (transactional)
-src/helpers.js       constants + validation helpers
-src/middleware.js    auth guards, CSRF origin check, login rate limiter
-src/analytics.js     net worth series, monthly income/expense aggregates
-src/routes/          auth, user, dashboard, expenses, habits, goals, wealth, admin
-public/              responsive SPA (vanilla JS, hash router, SVG charts)
-```
+
+### What each file does
+
+| File | Responsibility |
+| --- | --- |
+| `server.js` | Boots Express, seeds the DB on first run, configures sessions & CSRF, serves `/api/*` route modules, serves the SPA from `public/`, central error handler. Listens on `PORT` (default 3000). |
+| `src/db.js` | Defines all SQLite tables (users, income_sources, expenses, habits, habit_completions, goals, assets, feedback), integer-cents helpers, and the transactional seed with realistic demo data + the single admin account. |
+| `src/helpers.js` | Category/type/currency constants plus shared validation (`cleanStr`, `parseAmountCents`, `isValidDate`, email checks). |
+| `src/middleware.js` | `requireAuth` / `requireAdmin` guards, same-origin CSRF check for POST/PUT/DELETE, per-email login rate limiter. |
+| `src/analytics.js` | Pure aggregation used by dashboard & wealth routes: latest per-account net worth, month-by-month net-worth series, monthly income/expense totals, spending breakdown, month list. |
+| `src/routes/auth.js` | Registration (rejects the reserved admin email), login (rate-limited, suspension-aware), logout, session lookup. |
+| `src/routes/user.js` | Profile get/update, password change, feedback submission — all ownership-scoped. |
+| `src/routes/dashboard.js` | Combines net worth, current-month income/spending/savings-rate, top goals, habits due today, recent expenses. |
+| `src/routes/expenses.js` | CRUD for expenses & income sources with month filtering; every row is checked against the signed-in user. |
+| `src/routes/habits.js` | Habit CRUD, per-date completion toggle, streak & completion-rate math per frequency (day/week/month). |
+| `src/routes/goals.js` | Goal CRUD with target/current/deadline/color, and add/withdraw contributions that can't exceed the target or go negative. |
+| `src/routes/wealth.js` | Asset CRUD; returns latest valuation per account plus allocation and the 12-month net-worth series. |
+| `src/routes/admin.js` | Admin-only: platform metrics, registration-growth & spending data, user list with suspend/reactivate, feedback resolution. |
+| `public/index.html` | Marks-up the three mount points (`#app`, `#modal-root`, `#toasts`) and includes every script in load order. |
+| `public/css/styles.css` | Dark high-contrast theme via CSS variables; mobile-first layout, drawer nav, responsive stacked tables, bottom-sheet modals. |
+| `public/js/api.js` | One `api()` fetch helper: JSON in/out, throws server errors, redirects to login on 401. |
+| `public/js/ui.js` | Global `App` state, HTML escaping, toasts, modal/confirm helpers, currency/date formatting, category/asset-type color maps. |
+| `public/js/charts.js` | Dependency-free SVG line, bar, donut and sparkline charts; re-renders on resize and reads theme colors from CSS variables. |
+| `public/js/router.js` | Hash routing (`#/`, `#/expenses`, …), auth gate + admin gate, renders the sidebar/topbar shell, hosts profile & feedback modals. |
+| `public/js/pages/*.js` | One page per screen: fetch its data, render into `#view`, bind actions (each page mirrors its matching route file 1-to-1). |
+
+**Naming convention:** every screen under `public/js/pages/` has a matching API
+module under `src/routes/` (e.g. `expenses.js` ↔ `src/routes/expenses.js`), so a
+feature touches exactly two files plus `src/db.js` when it needs storage.
 
 Frontend is a single-page app with a hash router (`#/`, `#/expenses`, …) and no
 build step. Layout: fixed sidebar on laptops, hamburger drawer on phones; tables
