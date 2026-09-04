@@ -1,0 +1,6 @@
+node_modules/
+data/
+.freebuff/
+*.log
+.env
+.DS_Store
