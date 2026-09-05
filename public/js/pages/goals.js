@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -128,7 +128,7 @@ const GoalsPage = {
         <div class="field">
           <label>Target date (optional)</label>
           <input class="input" name="deadline" type="date" min="${todayStr()}" value="${existing && existing.deadline ? existing.deadline : ''}">
-          <div class="hint">Freebuff will show how many days are left to reach your goal.</div>
+          <div class="hint">WealthHabit will show how many days are left to reach your goal.</div>
         </div>
         <div class="field">
           <label>Color</label>

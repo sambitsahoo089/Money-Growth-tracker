@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -58,7 +58,7 @@ const HabitsPage = {
 
       <div class="card" style="background:linear-gradient(135deg,rgba(129,140,248,.14),rgba(168,85,247,.07));border-style:dashed;border-color:rgba(129,140,248,.5)">
         <div style="font-size:14px;font-weight:700;margin-bottom:4px;color:#c7d2fe">⏰ In-app reminders are on</div>
-        <div style="font-size:13px;color:var(--muted)">Freebuff highlights habits that are due each day on your dashboard. Mark them done right from the dashboard or here.</div>
+        <div style="font-size:13px;color:var(--muted)">WealthHabit highlights habits that are due each day on your dashboard. Mark them done right from the dashboard or here.</div>
       </div>
 
       ${habits.length === 0

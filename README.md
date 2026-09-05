@@ -1,4 +1,4 @@
-# Freebuff — Habit-Driven Wealth Builder
+# WealthHabit — Habit-Driven Wealth Builder
 
 A full-stack personal finance web application that helps users build consistent
 financial habits, track savings goals, and watch their net worth grow over time.

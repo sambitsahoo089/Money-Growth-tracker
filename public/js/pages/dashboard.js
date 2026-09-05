@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -16,7 +16,9 @@ const DashboardPage = {
       return;
     }
     const d = this.data;
-    const firstName = App.me.name.split(' ')[0];
+    let firstName = App.me.name.split(' ')[0];
+    // Brand-named accounts (e.g. "WealthHabit Admin") shouldn't be greeted by brand word alone
+    if (firstName.toLowerCase() === 'wealthhabit') firstName = App.me.name;
     const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
     const savingsRatePct = Math.round(d.savingsRate * 100);
     const expenseDelta = d.expenses - d.prevExpenses;

@@ -1,9 +1,9 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 /* ============================================================
-   Freebuff — design system (dark, high-contrast, responsive)
+   WealthHabit — design system (dark, high-contrast, responsive)
    ============================================================ */
 
 :root {
@@ -104,13 +104,15 @@ h1, h2, h3 { line-height: 1.25; }
   color: var(--text);
 }
 .brand .logo {
-  width: 34px; height: 34px;
-  border-radius: 10px;
+  width: 46px; height: 46px;
+  border-radius: 12px;
   background: linear-gradient(135deg, #6366f1, #a855f7);
   display: grid; place-items: center;
   color: #fff;
   box-shadow: 0 4px 14px rgba(99, 102, 241, .4);
   flex: none;
+  object-fit: contain;
+  padding: 5px;
 }
 .brand small { display: block; font-weight: 600; font-size: 11px; color: var(--muted); letter-spacing: .04em; }
 
@@ -440,8 +442,10 @@ table.data tbody tr:hover { background: rgba(255, 255, 255, .025); }
 }
 .auth-card .brand-big { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
 .auth-card .brand-big .logo {
-  width: 44px; height: 44px; border-radius: 13px; font-size: 20px;
+  width: 64px; height: 64px; border-radius: 16px;
   box-shadow: 0 6px 20px rgba(99, 102, 241, .45);
+  object-fit: contain;
+  padding: 8px;
 }
 .auth-card h1 { font-size: 21px; }
 .auth-card .tagline { color: var(--muted); font-size: 13.5px; margin-bottom: 18px; }

@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -14,9 +14,9 @@ const AuthPage = {
       <div class="auth-root">
         <div class="auth-card">
           <div class="brand-big">
-            <span class="logo">📈</span>
+            <img class="logo" src="/logo.png" alt="WealthHabit logo">
             <div>
-              <h1>Freebuff</h1>
+              <h1>WealthHabit</h1>
               <div class="tagline">Build the habits. Watch the wealth grow.</div>
             </div>
           </div>

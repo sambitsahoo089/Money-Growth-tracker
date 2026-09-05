@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -149,7 +149,7 @@ const WealthPage = {
         <div class="field">
           <label>As of date</label>
           <input class="input" name="date" type="date" max="${todayStr()}" value="${existing ? existing.date : todayStr()}" required>
-          <div class="hint">Record updated values over time — Freebuff builds your net-worth trend from them.</div>
+          <div class="hint">Record updated values over time — WealthHabit builds your net-worth trend from them.</div>
         </div>
         <div class="field">
           <label>Note (optional)</label>

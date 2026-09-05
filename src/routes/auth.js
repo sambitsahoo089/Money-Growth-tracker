@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -56,7 +56,7 @@ router.post('/register', (req, res) => {
   req.session.save((err) => {
     if (err) return bad(res, 'Could not start a session. Please sign in.', 500);
     const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
-    return res.status(201).json({ user: publicUser(user), message: 'Account created. Welcome to Freebuff!' });
+    return res.status(201).json({ user: publicUser(user), message: 'Account created. Welcome to WealthHabit!' });
   });
 });
 

@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -54,8 +54,8 @@ function renderShell(activeRoute) {
       <div class="sidebar-backdrop" id="nav-backdrop"></div>
       <aside class="sidebar" id="sidebar">
         <div class="brand">
-          <span class="logo">📈</span>
-          <span>Freebuff<small>WEALTH &amp; HABITS</small></span>
+          <img class="logo" src="/logo.png" alt="WealthHabit logo">
+          <span>WealthHabit<small>WEALTH &amp; HABITS</small></span>
         </div>
         <nav class="nav">
           <div class="nav-label">Finance</div>
@@ -80,7 +80,7 @@ function renderShell(activeRoute) {
       </aside>
       <div class="topbar">
         <button class="menu-btn" id="menu-btn" aria-label="Open menu">☰</button>
-        <span class="page-title">${PAGE_TITLES[activeRoute] || 'Freebuff'}</span>
+        <span class="page-title">${PAGE_TITLES[activeRoute] || 'WealthHabit'}</span>
         <span class="spacer"></span>
         <div class="user-menu">
           <span class="avatar">${esc(initials(me.name))}</span>

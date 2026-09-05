@@ -1,7 +1,7 @@
 {
-  "name": "freebuff-desktop",
+  "name": "wealthhabit",
   "version": "1.0.0",
-  "description": "Freebuff — a personal finance app for habit-driven wealth building. Expense & income tracking, habit streaks, savings goals, net worth analytics, and an admin panel.",
+  "description": "WealthHabit — a personal finance app for habit-driven wealth building. Expense & income tracking, habit streaks, savings goals, net worth analytics, and an admin panel.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

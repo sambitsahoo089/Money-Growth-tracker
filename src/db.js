@@ -1,5 +1,5 @@
 /*
- * Freebuff — Habit-Driven Wealth Builder
+ * WealthHabit — Habit-Driven Wealth Builder
  * © 2026 sambitsahoo089 · github.com/sambitsahoo089
  */
 'use strict';
@@ -386,7 +386,7 @@ function seed() {
     // Admin — the single admin account
     const adminHash = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
     db.prepare('INSERT INTO users (name, email, password_hash, role, currency, created_at, last_login_at) VALUES (?,?,?,?,?,?,?)')
-      .run('Freebuff Admin', SEED_ADMIN_EMAIL, adminHash, 'admin', 'USD', new Date().toISOString(), null);
+      .run('WealthHabit Admin', SEED_ADMIN_EMAIL, adminHash, 'admin', 'USD', new Date().toISOString(), null);
 
     // Demo clients with realistic data
     seedClient(db, { name: 'Alex Morgan', email: 'alex@example.com', password: 'DemoPass1', currency: 'USD' });
