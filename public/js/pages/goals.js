@@ -51,7 +51,7 @@ const GoalsPage = {
     view.querySelectorAll('[data-contribute]').forEach((form) => {
       form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const id = Number(form.dataset.contribute);
+        const id = form.dataset.contribute;
         const input = form.querySelector('input');
         const amount = input.value;
         try {
@@ -62,11 +62,11 @@ const GoalsPage = {
       });
     });
     view.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
-      const g = goals.find((x) => x.id === Number(b.dataset.edit));
+      const g = goals.find((x) => x.id === b.dataset.edit);
       this.openModal(g);
     }));
     view.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      const g = goals.find((x) => x.id === Number(b.dataset.del));
+      const g = goals.find((x) => x.id === b.dataset.del);
       const ok = await confirmDialog(`Delete goal "${esc(g.name)}"?`, { danger: true });
       if (!ok) return;
       try {

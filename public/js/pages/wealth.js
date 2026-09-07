@@ -109,15 +109,15 @@ const WealthPage = {
 
     view.querySelectorAll('#asset-add, #asset-add-2').forEach((b) => b.addEventListener('click', () => this.openModal()));
     view.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
-      const a = assets.find((x) => x.id === Number(b.dataset.edit));
+      const a = assets.find((x) => x.id === b.dataset.edit);
       this.openModal(a);
     }));
     view.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      const a = assets.find((x) => x.id === Number(b.dataset.del));
+      const a = assets.find((x) => x.id === b.dataset.del);
       const ok = await confirmDialog(`Remove "${esc(a.name)}" (${money(a.value)})?`, { danger: true });
       if (!ok) return;
       try {
-        const data = await api(`/api/assets/${a.id}`, { method: 'DELETE' });
+        const data = await api(`/api/wealth/assets/${a.id}`, { method: 'DELETE' });
         toast(data.message, 'success');
         this.show(view);
       } catch (err) { toast(err.message, 'error'); }
@@ -172,8 +172,8 @@ const WealthPage = {
       };
       try {
         const data = existing
-          ? await api(`/api/assets/${existing.id}`, { method: 'PUT', body })
-          : await api('/api/assets', { method: 'POST', body });
+          ? await api(`/api/wealth/assets/${existing.id}`, { method: 'PUT', body })
+          : await api('/api/wealth/assets', { method: 'POST', body });
         toast(data.message, 'success');
         close();
         this.show(document.getElementById('view'));

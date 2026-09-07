@@ -27,8 +27,13 @@ const ExpensesPage = {
 
   render(view) {
     const { month, data, income, tab } = this.state;
+    // Recurring salary — counts toward every month.
     const incMonthly = income.filter((i) => i.frequency === 'monthly').reduce((s, i) => s + i.amount, 0);
-    const netCashflow = incMonthly + data.summary.total === 0 ? 0 : (incMonthly - data.summary.total);
+    // Total income this month = recurring salary + one-time income dated within the selected month.
+    const incThisMonth = income
+      .filter((i) => i.frequency === 'monthly' || (i.frequency === 'one-time' && i.date.slice(0, 7) === month))
+      .reduce((s, i) => s + i.amount, 0);
+    const netCashflow = incThisMonth - data.summary.total;
 
     view.innerHTML = `
       <div class="page-head">
@@ -57,6 +62,7 @@ const ExpensesPage = {
       <div class="stat-grid">
         <div class="stat"><div class="label">Spent this month</div><div class="value">${money(data.summary.total)}</div></div>
         <div class="stat"><div class="label">Monthly income</div><div class="value">${money(incMonthly)}</div></div>
+        <div class="stat"><div class="label">Total income this month</div><div class="value">${money(incThisMonth)}</div></div>
         <div class="stat"><div class="label">Net cash flow</div><div class="value" style="color:${netCashflow >= 0 ? 'var(--green)' : 'var(--red)'}">${money(netCashflow)}</div></div>
         <div class="stat"><div class="label">Top category</div><div class="value" style="font-size:16px">${data.summary.byCategory[0] ? esc(catMeta(data.summary.byCategory[0].category).label) : '—'}</div></div>
       </div>
@@ -141,11 +147,11 @@ const ExpensesPage = {
       </div>`).join('') || '<div class="li muted">No spending this month.</div>';
 
     body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
-      const e = this.state.data.expenses.find((x) => x.id === Number(b.dataset.edit));
+      const e = this.state.data.expenses.find((x) => x.id === b.dataset.edit);
       this.openExpenseModal(e);
     }));
     body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      const e = this.state.data.expenses.find((x) => x.id === Number(b.dataset.del));
+      const e = this.state.data.expenses.find((x) => x.id === b.dataset.del);
       const ok = await confirmDialog(`Delete "${esc(e.description || catMeta(e.category).label)}" (${money(e.amount)})?`, { danger: true });
       if (!ok) return;
       try {
@@ -190,11 +196,11 @@ const ExpensesPage = {
       </div>`;
 
     body.querySelectorAll('[data-edit]').forEach((b) => b.addEventListener('click', () => {
-      const i = income.find((x) => x.id === Number(b.dataset.edit));
+      const i = income.find((x) => x.id === b.dataset.edit);
       this.openIncomeModal(i);
     }));
     body.querySelectorAll('[data-del]').forEach((b) => b.addEventListener('click', async () => {
-      const i = income.find((x) => x.id === Number(b.dataset.del));
+      const i = income.find((x) => x.id === b.dataset.del);
       const ok = await confirmDialog(`Delete income source "${esc(i.name)}"?`, { danger: true });
       if (!ok) return;
       try {

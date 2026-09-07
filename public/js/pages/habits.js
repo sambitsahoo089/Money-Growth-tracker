@@ -76,11 +76,11 @@ const HabitsPage = {
       });
     });
     view.querySelectorAll('[data-edit]').forEach((btn) => btn.addEventListener('click', () => {
-      const h = habits.find((x) => x.id === Number(btn.dataset.edit));
+      const h = habits.find((x) => x.id === btn.dataset.edit);
       this.openModal(h);
     }));
     view.querySelectorAll('[data-del]').forEach((btn) => btn.addEventListener('click', async () => {
-      const h = habits.find((x) => x.id === Number(btn.dataset.del));
+      const h = habits.find((x) => x.id === btn.dataset.del);
       const ok = await confirmDialog(`Delete habit "${esc(h.name)}"? Its ${h.bestStreak}-${plural(h.bestStreak, h.unit)} best streak will be lost.`, { danger: true });
       if (!ok) return;
       try {

@@ -4,21 +4,35 @@
  */
 'use strict';
 
-const { db, toDollars } = require('./db');
+const { col, oid, toDollars } = require('./db');
 
-/** Latest valuation per asset identity (name + type) — i.e. current portfolio. */
-function currentAssets(userId) {
-  const rows = db.prepare(`
-    SELECT a.* FROM assets a
-    JOIN (SELECT name, type, MAX(date) AS md FROM assets WHERE user_id = ? GROUP BY name, type) l
-      ON a.name = l.name AND a.type = l.type AND a.date = l.md
-    WHERE a.user_id = ?
-    ORDER BY a.type, a.name`).all(userId, userId);
-  return rows.map((r) => ({ id: r.id, name: r.name, type: r.type, value: toDollars(r.value_cents), date: r.date }));
+/** Collections store user_id as ObjectId; routes pass the hex-string id from the session. */
+function toUid(userId) {
+  const id = oid(userId);
+  if (!id) throw new Error('Invalid user id.');
+  return id;
 }
 
-function currentNetWorth(userId) {
-  return currentAssets(userId).reduce((s, a) => s + a.value, 0);
+function outId(doc) {
+  return doc ? String(doc._id) : null;
+}
+
+/** Latest valuation per asset identity (name + type) — i.e. current portfolio. */
+async function currentAssets(userId) {
+  const uid = toUid(userId);
+  const rows = await col('assets').aggregate([
+    { $match: { user_id: uid } },
+    { $sort: { date: 1, _id: 1 } },
+    { $group: { _id: { name: '$name', type: '$type' }, doc: { $last: '$$ROOT' } } },
+    { $replaceRoot: { newRoot: '$doc' } },
+    { $sort: { type: 1, name: 1 } },
+  ]).toArray();
+  return rows.map((r) => ({ id: outId(r), name: r.name, type: r.type, value: toDollars(r.value_cents), date: r.date }));
+}
+
+async function currentNetWorth(userId) {
+  const assets = await currentAssets(userId);
+  return assets.reduce((s, a) => s + a.value, 0);
 }
 
 /**
@@ -26,8 +40,9 @@ function currentNetWorth(userId) {
  * For each month end, the latest valuation (per asset identity) at or before
  * that month end is used.
  */
-function netWorthSeries(userId, months = 6) {
-  const assets = db.prepare('SELECT name, type, value_cents, date FROM assets WHERE user_id = ? ORDER BY date ASC').all(userId);
+async function netWorthSeries(userId, months = 6) {
+  const uid = toUid(userId);
+  const assets = await col('assets').find({ user_id: uid }).sort({ date: 1 }).toArray();
   if (assets.length === 0) return [];
 
   const points = [];
@@ -48,27 +63,32 @@ function netWorthSeries(userId, months = 6) {
 }
 
 /** Income credited during month YYYY-MM: recurring sources + one-time entries dated in that month. */
-function monthlyIncome(userId, month) {
-  const row = db.prepare(`
-    SELECT
-      COALESCE(SUM(CASE WHEN frequency = 'monthly' THEN amount_cents ELSE 0 END), 0) AS recurring_cents,
-      COALESCE(SUM(CASE WHEN frequency = 'one-time' AND date LIKE ? THEN amount_cents ELSE 0 END), 0) AS one_time_cents
-    FROM income_sources WHERE user_id = ?`).get(`${month}%`, userId);
-  return { recurring: toDollars(row.recurring_cents), oneTime: toDollars(row.one_time_cents), total: toDollars(row.recurring_cents + row.one_time_cents) };
+async function monthlyIncome(userId, month) {
+  const uid = toUid(userId);
+  const rows = await col('income_sources').find({ user_id: uid }).toArray();
+  let recurringCents = 0;
+  let oneTimeCents = 0;
+  for (const r of rows) {
+    if (r.frequency === 'monthly') recurringCents += r.amount_cents;
+    else if (r.frequency === 'one-time' && r.date.startsWith(month)) oneTimeCents += r.amount_cents;
+  }
+  return { recurring: toDollars(recurringCents), oneTime: toDollars(oneTimeCents), total: toDollars(recurringCents + oneTimeCents) };
 }
 
-function monthlyExpenses(userId, month) {
-  const row = db.prepare('SELECT COALESCE(SUM(amount_cents), 0) AS c FROM expenses WHERE user_id = ? AND date LIKE ?')
-    .get(userId, `${month}%`);
-  return toDollars(row.c);
+async function monthlyExpenses(userId, month) {
+  const uid = toUid(userId);
+  const rows = await col('expenses').find({ user_id: uid, date: { $regex: `^${month}` } }).toArray();
+  return toDollars(rows.reduce((s, e) => s + e.amount_cents, 0));
 }
 
-function expenseBreakdown(userId, month) {
-  const rows = db.prepare(`
-    SELECT category, SUM(amount_cents) AS c FROM expenses
-    WHERE user_id = ? AND date LIKE ?
-    GROUP BY category ORDER BY c DESC`).all(userId, `${month}%`);
-  return rows.map((r) => ({ category: r.category, total: toDollars(r.c) }));
+async function expenseBreakdown(userId, month) {
+  const uid = toUid(userId);
+  const rows = await col('expenses').aggregate([
+    { $match: { user_id: uid, date: { $regex: `^${month}` } } },
+    { $group: { _id: '$category', c: { $sum: '$amount_cents' } } },
+    { $sort: { c: -1 } },
+  ]).toArray();
+  return rows.map((r) => ({ category: r._id, total: toDollars(r.c) }));
 }
 
 function currentMonth() {
@@ -77,12 +97,22 @@ function currentMonth() {
 }
 
 /** Months (YYYY-MM) that have expense or income activity, newest first. */
-function activityMonths(userId) {
-  const rows = db.prepare(`
-    SELECT DISTINCT substr(date, 1, 7) AS m FROM expenses WHERE user_id = ?
-    UNION SELECT DISTINCT substr(date, 1, 7) FROM income_sources WHERE user_id = ?
-    ORDER BY m DESC`).all(userId, userId);
-  return rows.map((r) => r.m);
+async function activityMonths(userId) {
+  const uid = toUid(userId);
+  const [expenseMonths, incomeMonths] = await Promise.all([
+    col('expenses').aggregate([
+      { $match: { user_id: uid } },
+      { $group: { _id: { $substrCP: ['$date', 0, 7] } } },
+    ]).toArray(),
+    col('income_sources').aggregate([
+      { $match: { user_id: uid } },
+      { $group: { _id: { $substrCP: ['$date', 0, 7] } } },
+    ]).toArray(),
+  ]);
+  const months = new Set();
+  for (const r of expenseMonths) months.add(r._id);
+  for (const r of incomeMonths) months.add(r._id);
+  return [...months].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
 }
 
 module.exports = {

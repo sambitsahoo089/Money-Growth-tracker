@@ -117,7 +117,7 @@ const AdminPage = {
         </table></div>
       </div>`;
     body.querySelectorAll('[data-suspend]').forEach((b) => b.addEventListener('click', async () => {
-      const id = Number(b.dataset.suspend);
+      const id = b.dataset.suspend;
       const suspended = b.dataset.suspended === '1';
       const ok = await confirmDialog(suspended ? 'Re-activate this account?' : 'Suspend this account? They will not be able to sign in.', { danger: !suspended });
       if (!ok) return;
@@ -150,7 +150,7 @@ const AdminPage = {
             </div>`).join('')}
       </div>`;
     body.querySelectorAll('[data-fb]').forEach((b) => b.addEventListener('click', async () => {
-      const id = Number(b.dataset.fb);
+      const id = b.dataset.fb;
       const status = b.dataset.status === 'open' ? 'resolved' : 'open';
       try {
         const data = await api(`/api/admin/feedback/${id}`, { method: 'PUT', body: { status } });

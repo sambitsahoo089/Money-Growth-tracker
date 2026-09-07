@@ -5,17 +5,17 @@
 'use strict';
 
 const express = require('express');
-const { db, toDollars } = require('../db');
-const { requireAuth } = require('../middleware');
+const { col, oid, toDollars } = require('../db');
+const { requireAuth, wrap } = require('../middleware');
 const { ASSET_TYPES, cleanStr, isValidDate, parseAmountCents, bad } = require('../helpers');
 const { currentAssets, currentNetWorth, netWorthSeries } = require('../analytics');
 
 const router = express.Router();
 router.use(requireAuth);
 
-router.get('/', (req, res) => {
+router.get('/', wrap(async (req, res) => {
   const uid = req.session.userId;
-  const assets = currentAssets(uid);
+  const assets = await currentAssets(uid);
   const allocation = [];
   for (const a of assets) {
     const existing = allocation.find((x) => x.type === a.type);
@@ -24,14 +24,14 @@ router.get('/', (req, res) => {
   }
   allocation.sort((a, b) => b.value - a.value);
   return res.json({
-    netWorth: currentNetWorth(uid),
+    netWorth: await currentNetWorth(uid),
     assets,
     allocation,
-    netWorthSeries: netWorthSeries(uid, 12),
+    netWorthSeries: await netWorthSeries(uid, 12),
   });
-});
+}));
 
-router.post('/assets', (req, res) => {
+router.post('/assets', wrap(async (req, res) => {
   const name = cleanStr(req.body.name, 80);
   const type = ASSET_TYPES.includes(req.body.type) ? req.body.type : null;
   const value = parseAmountCents(req.body.value);
@@ -44,14 +44,16 @@ router.post('/assets', (req, res) => {
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
   if (date > new Date().toISOString().slice(0, 10)) return bad(res, 'Date cannot be in the future.');
 
-  const res2 = db.prepare('INSERT INTO assets (user_id, name, type, value_cents, date, note, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(req.session.userId, name, type, value, date, note, new Date().toISOString());
-  return res.status(201).json({ ok: true, id: Number(res2.lastInsertRowid), message: 'Asset recorded.' });
-});
+  const res2 = await col('assets').insertOne({
+    user_id: oid(req.session.userId), name, type, value_cents: value, date, note,
+    created_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ ok: true, id: String(res2.insertedId), message: 'Asset recorded.' });
+}));
 
-router.put('/assets/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM assets WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.put('/assets/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('assets').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!existing) return bad(res, 'Asset not found.', 404);
 
   const name = cleanStr(req.body.name, 80);
@@ -65,17 +67,16 @@ router.put('/assets/:id', (req, res) => {
   if (!value) return bad(res, 'Please enter a valid value (greater than 0).');
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
 
-  db.prepare('UPDATE assets SET name = ?, type = ?, value_cents = ?, date = ?, note = ? WHERE id = ?')
-    .run(name, type, value, date, note, id);
+  await col('assets').updateOne({ _id: id }, { $set: { name, type, value_cents: value, date, note } });
   return res.json({ ok: true, message: 'Asset updated.' });
-});
+}));
 
-router.delete('/assets/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM assets WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.delete('/assets/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('assets').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!existing) return bad(res, 'Asset not found.', 404);
-  db.prepare('DELETE FROM assets WHERE id = ?').run(id);
+  await col('assets').deleteOne({ _id: id });
   return res.json({ ok: true, message: 'Asset removed.' });
-});
+}));
 
 module.exports = router;

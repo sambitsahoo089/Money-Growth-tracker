@@ -4,115 +4,90 @@
  */
 'use strict';
 
-const { DatabaseSync } = require('node:sqlite');
-const fs = require('node:fs');
-const path = require('node:path');
+const { MongoClient, ObjectId } = require('mongodb');
 const bcrypt = require('bcryptjs');
 
-const DATA_DIR = path.join(__dirname, '..', 'data');
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-
-const DB_PATH = process.env.DB_PATH || path.join(DATA_DIR, 'freebuff.db');
-const db = new DatabaseSync(DB_PATH);
-
-db.exec('PRAGMA journal_mode = WAL;');
-db.exec('PRAGMA foreign_keys = ON;');
-
 /* ------------------------------------------------------------------ */
-/* Schema                                                              */
+/* Connection                                                          */
 /* ------------------------------------------------------------------ */
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  name          TEXT    NOT NULL,
-  email         TEXT    NOT NULL UNIQUE,
-  password_hash TEXT    NOT NULL,
-  role          TEXT    NOT NULL DEFAULT 'client',   -- client | admin
-  currency      TEXT    NOT NULL DEFAULT 'USD',
-  suspended     INTEGER NOT NULL DEFAULT 0,
-  created_at    TEXT    NOT NULL,
-  last_login_at TEXT
-);
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017';
+// Database name: explicit env wins, else the name embedded in the URI (e.g.
+// mongodb+srv://…/wealthhabit), else a sensible default.
+const URI_DB = (() => {
+  try {
+    const m = /^\w+:\/\/[^/]+\/([^/?]+)/.exec(MONGODB_URI);
+    return m ? m[1] : null;
+  } catch {
+    return null;
+  }
+})();
+const DB_NAME = process.env.MONGODB_DB || URI_DB || 'wealthhabit';
 
-CREATE TABLE IF NOT EXISTS income_sources (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name         TEXT    NOT NULL,
-  amount_cents INTEGER NOT NULL,
-  category     TEXT    NOT NULL,
-  frequency    TEXT    NOT NULL DEFAULT 'monthly',   -- monthly | one-time
-  date         TEXT    NOT NULL,                     -- start date (one-time: occurrence)
-  created_at   TEXT    NOT NULL
-);
+let client = null;
+let database = null;
 
-CREATE TABLE IF NOT EXISTS expenses (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  amount_cents INTEGER NOT NULL,
-  category     TEXT    NOT NULL,
-  description  TEXT    NOT NULL DEFAULT '',
-  date         TEXT    NOT NULL,
-  created_at   TEXT    NOT NULL
-);
+async function init() {
+  if (client && database) return database;
+  client = new MongoClient(MONGODB_URI, { appName: 'wealthhabit' });
+  await client.connect();
+  database = client.db(DB_NAME);
+  await ensureIndexes(database);
+  return database;
+}
 
-CREATE TABLE IF NOT EXISTS habits (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name        TEXT    NOT NULL,
-  frequency   TEXT    NOT NULL DEFAULT 'daily',      -- daily | weekly | monthly
-  reminder    INTEGER NOT NULL DEFAULT 1,
-  archived    INTEGER NOT NULL DEFAULT 0,
-  created_at  TEXT    NOT NULL
-);
+/** Make sure the connection exists (used by seed scripts run standalone). */
+async function ensureConnected() {
+  if (!database) await init();
+  return database;
+}
 
-CREATE TABLE IF NOT EXISTS habit_completions (
-  id       INTEGER PRIMARY KEY AUTOINCREMENT,
-  habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
-  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  date     TEXT    NOT NULL,
-  UNIQUE (habit_id, date)
-);
+async function close() {
+  if (client) await client.close();
+}
 
-CREATE TABLE IF NOT EXISTS goals (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name          TEXT    NOT NULL,
-  target_cents  INTEGER NOT NULL,
-  current_cents INTEGER NOT NULL DEFAULT 0,
-  deadline      TEXT,
-  color         TEXT    NOT NULL DEFAULT '#6366f1',
-  created_at    TEXT    NOT NULL
-);
+/** Grab a collection — call after `await init()`. */
+function col(name) {
+  if (!database) throw new Error('Database not initialised — call init() before using collections.');
+  return database.collection(name);
+}
 
-CREATE TABLE IF NOT EXISTS assets (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name        TEXT    NOT NULL,
-  type        TEXT    NOT NULL,
-  value_cents INTEGER NOT NULL,
-  date        TEXT    NOT NULL,   -- as-of date of this valuation
-  note        TEXT    NOT NULL DEFAULT '',
-  created_at  TEXT    NOT NULL
-);
+function isObjectIdString(s) {
+  return typeof s === 'string' && /^[0-9a-fA-F]{24}$/.test(s);
+}
 
-CREATE TABLE IF NOT EXISTS feedback (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  subject    TEXT    NOT NULL,
-  message    TEXT    NOT NULL,
-  status     TEXT    NOT NULL DEFAULT 'open',        -- open | resolved
-  created_at TEXT    NOT NULL
-);
+/** Parse a route param into an ObjectId, or null when invalid (→ 404). */
+function oid(s) {
+  if (!isObjectIdString(s)) return null;
+  return new ObjectId(s);
+}
 
-CREATE INDEX IF NOT EXISTS idx_expenses_user_date   ON expenses(user_id, date);
-CREATE INDEX IF NOT EXISTS idx_income_user          ON income_sources(user_id);
-CREATE INDEX IF NOT EXISTS idx_habits_user          ON habits(user_id);
-CREATE INDEX IF NOT EXISTS idx_completions_user     ON habit_completions(user_id, date);
-CREATE INDEX IF NOT EXISTS idx_goals_user           ON goals(user_id);
-CREATE INDEX IF NOT EXISTS idx_assets_user_date     ON assets(user_id, date);
-CREATE INDEX IF NOT EXISTS idx_feedback_status      ON feedback(status);
-`);
+async function ensureIndexes(db) {
+  const users = db.collection('users');
+  const expenses = db.collection('expenses');
+  const incomeSources = db.collection('income_sources');
+  const habits = db.collection('habits');
+  const completions = db.collection('habit_completions');
+  const goals = db.collection('goals');
+  const assets = db.collection('assets');
+  const feedback = db.collection('feedback');
+  const sessions = db.collection('sessions');
+
+  await Promise.all([
+    users.createIndex({ email: 1 }, { unique: true }),
+    users.createIndex({ role: 1, created_at: 1 }),
+    expenses.createIndex({ user_id: 1, date: -1 }),
+    incomeSources.createIndex({ user_id: 1, date: -1 }),
+    habits.createIndex({ user_id: 1, created_at: 1 }),
+    completions.createIndex({ habit_id: 1, date: 1 }, { unique: true }),
+    completions.createIndex({ user_id: 1, date: 1 }),
+    goals.createIndex({ user_id: 1, created_at: 1 }),
+    assets.createIndex({ user_id: 1, date: 1 }),
+    feedback.createIndex({ user_id: 1 }),
+    feedback.createIndex({ status: 1, created_at: -1 }),
+    sessions.createIndex({ expires: 1 }, { expireAfterSeconds: 0 }),
+  ]);
+}
 
 /* ------------------------------------------------------------------ */
 /* Shared helpers                                                      */
@@ -147,7 +122,7 @@ const SEED_ADMIN_EMAIL = 'sambitkusahoo089@gmail.com';
 const SEED_ADMIN_PASSWORD = 'sam@1234';
 
 const EXPENSE_SEED = [
-  // [date, amount, category, description]
+  // [date-days-ago, amount, category, description]
   // This month (relative to seed run)
   [0, 1850.0, 'housing', 'Rent — Maple Street apartment'],
   [0, 64.2,  'utilities', 'Electricity bill'],
@@ -176,7 +151,6 @@ const EXPENSE_SEED = [
   [40, 18.0,  'entertainment', 'Concert ticket'],
   [41, 22.9,  'subscriptions', 'Streaming + music subscription'],
   [43, 11.25, 'transport', 'Metro card top-up'],
-
   // 2 months ago
   [62, 1850.0, 'housing', 'Rent — Maple Street apartment'],
   [63, 59.3,  'utilities', 'Electricity bill'],
@@ -207,97 +181,111 @@ const EXPENSE_SEED = [
   [103, 27.3,  'food', 'Team lunch'],
 ];
 
-// Healthier entries replacing the placeholder above.
-function seedExpenses(userId, now) {
-  const insert = db.prepare(`
-    INSERT INTO expenses (user_id, amount_cents, category, description, date, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)`);
+/** Expense documents (amount in cents) for a user, relative to `now`. */
+function buildExpenseDocs(userId, now) {
   const rows = EXPENSE_SEED.map(([ago, amount, category, desc]) => {
     const date = new Date(now);
     date.setDate(date.getDate() - ago);
-    return [amount, category, desc, date.toISOString().slice(0, 10)];
+    return { amount_cents: toCents(amount), category, description: desc, date: date.toISOString().slice(0, 10) };
   });
   // A couple of explicitly-realistic dining rows (kept in 'food' category, as dining is a sub-style)
   const extraDining = (ago, amount, desc) => {
     const d = new Date(now);
     d.setDate(d.getDate() - ago);
-    rows.push([amount, 'food', desc, d.toISOString().slice(0, 10)]);
+    rows.push({ amount_cents: toCents(amount), category: 'food', description: desc, date: d.toISOString().slice(0, 10) });
   };
   extraDining(3, 18.75, 'Dinner out — Sushi spot');
   extraDining(25, 26.0, 'Brunch with friends');
   extraDining(44, 13.6, 'Coffee + pastry, caf\u00e9');
+
   const seen = new Set();
-  for (const [amount, category, desc, date] of rows) {
-    const key = `${date}|${amount}|${category}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    insert.run(userId, toCents(amount), category, desc, date, now);
-  }
+  return rows
+    .filter((r) => {
+      const key = `${r.date}|${r.amount_cents}|${r.category}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((r) => ({ user_id: userId, created_at: now, ...r }));
 }
 
-function seedClient(db, { name, email, password, currency = 'USD' }) {
+async function seedClient({ name, email, password, currency = 'USD', joinedAt = null }) {
   const now = new Date().toISOString();
   const hash = bcrypt.hashSync(password, 10);
-  const userRes = db.prepare('INSERT INTO users (name, email, password_hash, role, currency, created_at, last_login_at) VALUES (?,?,?,?,?,?,?)')
-    .run(name, email, hash, 'client', currency, now, now);
-  const userId = Number(userRes.lastInsertRowid);
+  const userRes = await col('users').insertOne({
+    name,
+    email,
+    password_hash: hash,
+    role: 'client',
+    currency,
+    suspended: 0,
+    created_at: joinedAt || now,
+    last_login_at: now,
+  });
+  const userId = userRes.insertedId;
 
-  // Income
-  const inc = db.prepare('INSERT INTO income_sources (user_id, name, amount_cents, category, frequency, date, created_at) VALUES (?,?,?,?,?,?,?)');
-  inc.run(userId, 'Salary — Northwind Tech', toCents(6400), 'salary', 'monthly', isoDaysAgo(200), now);
-  inc.run(userId, 'Freelance design work', toCents(850), 'freelance', 'monthly', isoDaysAgo(180), now);
-  inc.run(userId, 'Side project payout', toCents(1200), 'business', 'one-time', isoMonthsAgo(2), now);
+  await col('income_sources').insertMany([
+    { user_id: userId, name: 'Salary — Northwind Tech', amount_cents: toCents(6400), category: 'salary', frequency: 'monthly', date: isoDaysAgo(200), created_at: now },
+    { user_id: userId, name: 'Freelance design work', amount_cents: toCents(850), category: 'freelance', frequency: 'monthly', date: isoDaysAgo(180), created_at: now },
+    { user_id: userId, name: 'Side project payout', amount_cents: toCents(1200), category: 'business', frequency: 'one-time', date: isoMonthsAgo(2), created_at: now },
+  ]);
 
-  seedExpenses(userId, now);
+  const expenseDocs = buildExpenseDocs(userId, now);
+  for (let i = 0; i < expenseDocs.length; i += 100) {
+    await col('expenses').insertMany(expenseDocs.slice(i, i + 100));
+  }
 
-  // Habits
-  const hab = db.prepare('INSERT INTO habits (user_id, name, frequency, reminder, archived, created_at) VALUES (?,?,?,?,?,?)');
-  const habits = [
+  // Habits + completions
+  const habitDocs = [
     ['Log daily expenses', 'daily', 1],
     ['Transfer to savings on payday', 'weekly', 1],
     ['Review budget every Sunday', 'weekly', 1],
     ['Invest in index fund monthly', 'monthly', 1],
-  ];
+  ].map(([n, f, r]) => ({ user_id: userId, name: n, frequency: f, reminder: r, archived: 0, created_at: now }));
   const habitIds = [];
-  for (const [n, f, r] of habits) {
-    const res = hab.run(userId, n, f, r, 0, now);
-    habitIds.push(Number(res.lastInsertRowid));
+  for (const doc of habitDocs) {
+    const res = await col('habits').insertOne(doc);
+    habitIds.push(res.insertedId);
   }
 
   // Completions: daily habit — every day for the last 14 days except 2 (realistic gap)
-  const comp = db.prepare('INSERT OR IGNORE INTO habit_completions (habit_id, user_id, date) VALUES (?,?,?)');
+  const compDocs = [];
   for (let i = 0; i < 14; i++) {
     if (i === 5 || i === 9) continue; // two missed days → current streak shows a fresh run
-    comp.run(habitIds[0], userId, isoDaysAgo(i));
+    compDocs.push({ habit_id: habitIds[0], user_id: userId, date: isoDaysAgo(i) });
   }
-  // Weekly habit: every Monday for the last 8 weeks except 2
+  // Weekly habits: every Monday for the last 8 weeks except 2
   const monday = new Date(); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
   for (let w = 0; w < 8; w++) {
     if (w === 3) continue;
     const d = new Date(monday); d.setDate(d.getDate() - w * 7);
-    comp.run(habitIds[1], userId, d.toISOString().slice(0, 10));
+    compDocs.push({ habit_id: habitIds[1], user_id: userId, date: d.toISOString().slice(0, 10) });
   }
   for (let w = 0; w < 8; w++) {
     if (w === 6) continue;
     const d = new Date(monday); d.setDate(d.getDate() - w * 7);
-    comp.run(habitIds[2], userId, d.toISOString().slice(0, 10));
+    compDocs.push({ habit_id: habitIds[2], user_id: userId, date: d.toISOString().slice(0, 10) });
   }
   // Monthly habit: first week of each of the last 3 months
   for (let m = 0; m < 3; m++) {
     const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - m); d.setDate(Math.min(7, d.getDate() + 5));
-    comp.run(habitIds[3], userId, d.toISOString().slice(0, 10));
+    compDocs.push({ habit_id: habitIds[3], user_id: userId, date: d.toISOString().slice(0, 10) });
+  }
+  for (let i = 0; i < compDocs.length; i += 200) {
+    await col('habit_completions').insertMany(compDocs.slice(i, i + 200));
   }
 
   // Goals
-  const goal = db.prepare('INSERT INTO goals (user_id, name, target_cents, current_cents, deadline, color, created_at) VALUES (?,?,?,?,?,?,?)');
   const dl = (months) => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
-  goal.run(userId, 'Emergency Fund', toCents(15000), toCents(9850), dl(10), '#10b981', now);
-  goal.run(userId, 'Japan Trip', toCents(4200), toCents(1600), dl(8), '#ec4899', now);
-  goal.run(userId, 'New Laptop', toCents(2400), toCents(1890), dl(2), '#6366f1', now);
+  await col('goals').insertMany([
+    { user_id: userId, name: 'Emergency Fund', target_cents: toCents(15000), current_cents: toCents(9850), deadline: dl(10), color: '#10b981', created_at: now },
+    { user_id: userId, name: 'Japan Trip', target_cents: toCents(4200), current_cents: toCents(1600), deadline: dl(8), color: '#ec4899', created_at: now },
+    { user_id: userId, name: 'New Laptop', target_cents: toCents(2400), current_cents: toCents(1890), deadline: dl(2), color: '#6366f1', created_at: now },
+  ]);
 
   // Assets — multiple valuations per account so the net-worth trend line rises
-  const asset = db.prepare('INSERT INTO assets (user_id, name, type, value_cents, date, note, created_at) VALUES (?,?,?,?,?,?,?)');
-  const av = (name, type, cents, daysAgo, note = '') => asset.run(userId, name, type, cents, isoDaysAgo(daysAgo), note, now);
+  const assetDocs = [];
+  const av = (name, type, cents, daysAgo, note = '') => assetDocs.push({ user_id: userId, name, type, value_cents: cents, date: isoDaysAgo(daysAgo), note, created_at: now });
   av('Checking — Chase', 'checking', toCents(3120), 95, 'Main checking account');
   av('Checking — Chase', 'checking', toCents(3480), 62);
   av('Checking — Chase', 'checking', toCents(3940), 30);
@@ -322,45 +310,68 @@ function seedClient(db, { name, email, password, currency = 'USD' }) {
   av('Crypto (BTC + ETH)', 'crypto', toCents(2900), 62);
   av('Crypto (BTC + ETH)', 'crypto', toCents(3050), 30);
   av('Crypto (BTC + ETH)', 'crypto', toCents(3100), 1);
+  for (let i = 0; i < assetDocs.length; i += 100) {
+    await col('assets').insertMany(assetDocs.slice(i, i + 100));
+  }
 
-  // Feedback
-  const fb = db.prepare('INSERT INTO feedback (user_id, subject, message, status, created_at) VALUES (?,?,?,?,?)');
-  fb.run(userId, 'Love the habit streaks', 'The daily streak for logging expenses keeps me honest. Would love a widget for the phone home screen.', 'open', isoDaysAgo(4) + 'T09:14:00.000Z');
-  fb.run(userId, 'Currency display bug on reports', 'Monthly report showed the total in USD even though my profile currency is EUR.', 'resolved', isoDaysAgo(21) + 'T18:32:00.000Z');
+  await col('feedback').insertMany([
+    { user_id: userId, subject: 'Love the habit streaks', message: 'The daily streak for logging expenses keeps me honest. Would love a widget for the phone home screen.', status: 'open', created_at: isoDaysAgo(4) + 'T09:14:00.000Z' },
+    { user_id: userId, subject: 'Currency display bug on reports', message: 'Monthly report showed the total in USD even though my profile currency is EUR.', status: 'resolved', created_at: isoDaysAgo(21) + 'T18:32:00.000Z' },
+  ]);
 
   return userId;
 }
 
-function seedClientSam(db) {
+async function seedClientSam() {
   const now = new Date().toISOString();
-  const hash = bcrypt.hashSync('DemoPass1', 10);
-  // Joined 2 months ago (so the registration chart shows growth) but active recently
   const joined = isoMonthsAgo(2) + 'T10:00:00.000Z';
-  const userRes = db.prepare('INSERT INTO users (name, email, password_hash, role, currency, created_at, last_login_at) VALUES (?,?,?,?,?,?,?)')
-    .run('Sam Rivera', 'sam@example.com', hash, 'client', 'USD', joined, now);
-  const userId = Number(userRes.lastInsertRowid);
+  const hash = bcrypt.hashSync('DemoPass1', 10);
+  const userRes = await col('users').insertOne({
+    name: 'Sam Rivera',
+    email: 'sam@example.com',
+    password_hash: hash,
+    role: 'client',
+    currency: 'USD',
+    suspended: 0,
+    created_at: joined,
+    last_login_at: now,
+  });
+  const userId = userRes.insertedId;
 
-  const inc = db.prepare('INSERT INTO income_sources (user_id, name, amount_cents, category, frequency, date, created_at) VALUES (?,?,?,?,?,?,?)');
-  inc.run(userId, 'Salary — Bridgepoint Studio', toCents(4200), 'salary', 'monthly', isoDaysAgo(200), now);
-  seedExpenses(userId, now);
+  await col('income_sources').insertMany([
+    { user_id: userId, name: 'Salary — Bridgepoint Studio', amount_cents: toCents(4200), category: 'salary', frequency: 'monthly', date: isoDaysAgo(200), created_at: now },
+  ]);
 
-  const hab = db.prepare('INSERT INTO habits (user_id, name, frequency, reminder, archived, created_at) VALUES (?,?,?,?,?,?)');
-  const habitIds = [];
-  for (const [n, f, r] of [['Log daily expenses', 'daily', 1], ['Transfer to savings on payday', 'weekly', 1], ['Review budget every Sunday', 'weekly', 1], ['Invest in index fund monthly', 'monthly', 1]]) {
-    const res = hab.run(userId, n, f, r, 0, now);
-    habitIds.push(Number(res.lastInsertRowid));
+  const expenseDocs = buildExpenseDocs(userId, now);
+  for (let i = 0; i < expenseDocs.length; i += 100) {
+    await col('expenses').insertMany(expenseDocs.slice(i, i + 100));
   }
-  const comp = db.prepare('INSERT OR IGNORE INTO habit_completions (habit_id, user_id, date) VALUES (?,?,?)');
-  for (let i = 0; i < 12; i++) { if (i === 4 || i === 8) continue; comp.run(habitIds[0], userId, isoDaysAgo(i)); }
 
-  const goal = db.prepare('INSERT INTO goals (user_id, name, target_cents, current_cents, deadline, color, created_at) VALUES (?,?,?,?,?,?,?)');
+  const habitDocs = [
+    ['Log daily expenses', 'daily', 1],
+    ['Transfer to savings on payday', 'weekly', 1],
+    ['Review budget every Sunday', 'weekly', 1],
+    ['Invest in index fund monthly', 'monthly', 1],
+  ].map(([n, f, r]) => ({ user_id: userId, name: n, frequency: f, reminder: r, archived: 0, created_at: now }));
+  const habitIds = [];
+  for (const doc of habitDocs) {
+    const res = await col('habits').insertOne(doc);
+    habitIds.push(res.insertedId);
+  }
+
+  const compDocs = [];
+  for (let i = 0; i < 12; i++) { if (i === 4 || i === 8) continue; compDocs.push({ habit_id: habitIds[0], user_id: userId, date: isoDaysAgo(i) }); }
+  await col('habit_completions').insertMany(compDocs);
+
   const dl = (months) => { const d = new Date(); d.setMonth(d.getMonth() + months); return d.toISOString().slice(0, 10); };
-  goal.run(userId, 'Down payment on a car', toCents(9000), toCents(4600), dl(6), '#f59e0b', now);
-  goal.run(userId, 'Emergency Fund', toCents(12000), toCents(8100), dl(5), '#10b981', now);
-  goal.run(userId, 'Weekend hiking gear', toCents(900), toCents(720), dl(1), '#06b6d4', now);
+  await col('goals').insertMany([
+    { user_id: userId, name: 'Down payment on a car', target_cents: toCents(9000), current_cents: toCents(4600), deadline: dl(6), color: '#f59e0b', created_at: now },
+    { user_id: userId, name: 'Emergency Fund', target_cents: toCents(12000), current_cents: toCents(8100), deadline: dl(5), color: '#10b981', created_at: now },
+    { user_id: userId, name: 'Weekend hiking gear', target_cents: toCents(900), current_cents: toCents(720), deadline: dl(1), color: '#06b6d4', created_at: now },
+  ]);
 
-  const asset = db.prepare('INSERT INTO assets (user_id, name, type, value_cents, date, note, created_at) VALUES (?,?,?,?,?,?,?)');
-  const av = (name, type, cents, daysAgo, note = '') => asset.run(userId, name, type, cents, isoDaysAgo(daysAgo), note, now);
+  const assetDocs = [];
+  const av = (name, type, cents, daysAgo, note = '') => assetDocs.push({ user_id: userId, name, type, value_cents: cents, date: isoDaysAgo(daysAgo), note, created_at: now });
   av('Checking — BofA', 'checking', toCents(2450), 60);
   av('Checking — BofA', 'checking', toCents(2890), 1);
   av('High-Yield Savings', 'savings', toCents(6200), 60);
@@ -369,53 +380,65 @@ function seedClientSam(db) {
   av('S&P 500 Index Fund', 'investments', toCents(12950), 1);
   av('401(k) — Bridgepoint', 'retirement', toCents(34700), 60);
   av('401(k) — Bridgepoint', 'retirement', toCents(37200), 1);
+  await col('assets').insertMany(assetDocs);
 
-  const fb = db.prepare('INSERT INTO feedback (user_id, subject, message, status, created_at) VALUES (?,?,?,?,?)');
-  fb.run(userId, 'Suggestion: export a PDF monthly report', 'Would be great to get a clean PDF summary of the month, ready to share with a partner.', 'open', isoDaysAgo(2) + 'T20:05:00.000Z');
-  fb.run(userId, 'App is slower on my older phone', 'The dashboard takes a while to load on my 4-year-old Android. Charts seem heavy.', 'resolved', isoDaysAgo(12) + 'T11:40:00.000Z');
+  await col('feedback').insertMany([
+    { user_id: userId, subject: 'Suggestion: export a PDF monthly report', message: 'Would be great to get a clean PDF summary of the month, ready to share with a partner.', status: 'open', created_at: isoDaysAgo(2) + 'T20:05:00.000Z' },
+    { user_id: userId, subject: 'App is slower on my older phone', message: 'The dashboard takes a while to load on my 4-year-old Android. Charts seem heavy.', status: 'resolved', created_at: isoDaysAgo(12) + 'T11:40:00.000Z' },
+  ]);
 
   return userId;
 }
 
-function seed() {
-  const count = db.prepare('SELECT COUNT(*) AS c FROM users').get().c;
+async function seed() {
+  await ensureConnected();
+  const count = await col('users').countDocuments({});
   if (count > 0) return { seeded: false, reason: 'already populated' };
 
-  db.exec('BEGIN');
-  try {
-    // Admin — the single admin account
-    const adminHash = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
-    db.prepare('INSERT INTO users (name, email, password_hash, role, currency, created_at, last_login_at) VALUES (?,?,?,?,?,?,?)')
-      .run('WealthHabit Admin', SEED_ADMIN_EMAIL, adminHash, 'admin', 'USD', new Date().toISOString(), null);
+  // Admin — the single admin account
+  const adminHash = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
+  await col('users').insertOne({
+    name: 'WealthHabit Admin',
+    email: SEED_ADMIN_EMAIL,
+    password_hash: adminHash,
+    role: 'admin',
+    currency: 'USD',
+    suspended: 0,
+    created_at: new Date().toISOString(),
+    last_login_at: null,
+  });
 
-    // Demo clients with realistic data
-    seedClient(db, { name: 'Alex Morgan', email: 'alex@example.com', password: 'DemoPass1', currency: 'USD' });
-    seedClientSam(db);
-    db.exec('COMMIT');
-    return { seeded: true };
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  // Demo clients with realistic data
+  await seedClient({ name: 'Alex Morgan', email: 'alex@example.com', password: 'DemoPass1', currency: 'USD' });
+  await seedClientSam();
+  return { seeded: true };
 }
 
-function resetAndSeed() {
-  db.exec(`
-    DELETE FROM feedback;
-    DELETE FROM assets;
-    DELETE FROM goals;
-    DELETE FROM habit_completions;
-    DELETE FROM habits;
-    DELETE FROM expenses;
-    DELETE FROM income_sources;
-    DELETE FROM users;
-  `);
-  seed();
+async function resetAndSeed() {
+  await ensureConnected();
+  await Promise.all([
+    col('feedback').deleteMany({}),
+    col('assets').deleteMany({}),
+    col('goals').deleteMany({}),
+    col('habit_completions').deleteMany({}),
+    col('habits').deleteMany({}),
+    col('expenses').deleteMany({}),
+    col('income_sources').deleteMany({}),
+    col('users').deleteMany({}),
+  ]);
+  const result = await seed();
   console.log('Database reseeded.');
+  return result;
 }
 
 module.exports = {
-  db,
+  init,
+  close,
+  col,
+  oid,
+  ObjectId,
+  DB_NAME,
+  MONGODB_URI,
   seed,
   resetAndSeed,
   toCents,

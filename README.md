@@ -4,6 +4,10 @@ A full-stack personal finance web application that helps users build consistent
 financial habits, track savings goals, and watch their net worth grow over time.
 Works on **phones and laptops** (mobile-first responsive UI).
 
+Deployed as a **Vercel SPA + Render API + MongoDB Atlas** stack (see
+[Deployment](#deployment)). Data is stored in MongoDB, sessions live in MongoDB
+too, and every figure is kept in integer **cents** to avoid floating-point drift.
+
 ## Pages (7 interconnected)
 
 | Page | What it does |
@@ -30,34 +34,129 @@ Clients register through the "Create account" tab. Demo clients come pre-loaded
 with realistic data (salary, 4 months of expenses, habits with streaks, savings
 goals, multi-account net worth history, feedback) so every page is meaningful.
 New registrations start with three habit templates and clean empty states.
+The database is seeded automatically on first boot and only when empty.
 
-## Run it
+## Architecture
 
-Requires **Node.js ≥ 22.13** (uses the built-in `node:sqlite`, no native builds).
+```text
+┌─────────────────────┐        HTTPS + JSON        ┌──────────────────────┐        ┌──────────────────┐
+│  Vercel (static SPA)│  ───────────────────────▶  │  Render (Express API)│ ─────▶ │ MongoDB Atlas    │
+│  public/            │  cookies + CORS allow-list │  server.js + src/    │        │ data + sessions  │
+└─────────────────────┘                            └──────────────────────┘        └──────────────────┘
+   /config.js (lambda)  → window.APP_API_BASE = https://your-api.onrender.com
+```
+
+- **Vercel** serves the static SPA from `public/`. A tiny lambda
+  (`public/api/config.js`) serves `/config.js`, which tells the SPA where the
+  API lives (`API_BASE_URL` env var). Vercel's project **Root Directory must be
+  `public`** so the SPA lands at `/` and the `/api/*` folder becomes functions.
+- **Render** runs the whole Express server (`node server.js`): all `/api/*`
+  routes, session management (MongoDB-backed store), CORS + CSRF handling for
+  the Vercel origin, and it also serves the SPA itself, so opening the Render
+  URL directly still works.
+- **MongoDB Atlas** stores all collections plus the `sessions` collection
+  (auto-expiring via a TTL index).
+
+Cookies are `SameSite=None; Secure` in production and the API whitelists the
+frontend origin, so the browser happily sends the session cookie cross-site.
+Login rate limiting is in-memory — fine for Render's single instance.
+
+### Runtime config / env vars
+
+| Variable | Where | Purpose |
+| --- | --- | --- |
+| `MONGODB_URI` | Render (required) | `mongodb+srv://…` connection string (any host — local `mongod` works too) |
+| `MONGODB_DB` | optional | Override the database name (defaults to the name in the URI, else `wealthhabit`) |
+| `SESSION_SECRET` | Render (required in prod) | Signs session cookies. Without it a random secret is used per boot |
+| `ALLOWED_ORIGINS` | Render | Comma-separated SPA origins, e.g. `https://wealthhabit.vercel.app`. Same-origin requests always pass |
+| `API_BASE_URL` | Render + Vercel | Full URL of the Render API, e.g. `https://wealthhabit-api.onrender.com`. Served to the SPA via `/config.js`; empty = same-origin |
+| `PORT` | Render | Render injects this automatically; local default is 3000 |
+| `NODE_ENV` | Render | `production` (enables Secure + SameSite=None cookies) |
+
+## Run it locally
+
+Requires **Node.js ≥ 20.19** and a MongoDB instance — a free Atlas M0 cluster
+or a local `mongod`.
 
 ```bash
 npm install
-npm start          # → http://localhost:3000
+
+# local MongoDB:
+export MONGODB_URI="mongodb://127.0.0.1:27017/wealthhabit"
+npm start            # → http://localhost:3000
 ```
+
+If you use an Atlas cluster, set `MONGODB_URI` to your
+`mongodb+srv://user:password@cluster0.xxxxx.mongodb.net/wealthhabit` string
+(the app seeds the admin + demo data on first boot).
 
 Other scripts:
 
 ```bash
-npm run dev        # auto-restart on file changes (node --watch)
-npm run seed       # wipe the database and re-seed fresh demo data
+npm run dev         # auto-restart on file changes (node --watch)
+npm run seed        # wipe all collections and re-seed fresh demo data
 ```
 
-Set `PORT=4000 npm start` to change the port. Data is stored in `data/freebuff.db`
-(gitignored, created on first run).
+## Deployment
+
+### 1. MongoDB Atlas (database)
+
+1. Create a free **M0 cluster** at https://www.mongodb.com/atlas.
+2. **Database Access** → Add New Database User (e.g. `wealthhabit`) and set a
+   strong password.
+3. **Network Access** → Add your IP (or `0.0.0.0/0` for the whole internet —
+   easiest for Render/Vercel, still protected by the DB password).
+4. **Databases** → Connect → Drivers → copy the connection string and append
+   your database name, e.g.:
+   `mongodb+srv://wealthhabit:<password>@cluster0.xxxxx.mongodb.net/wealthhabit`.
+
+### 2. Render (API)
+
+1. Push this repo to GitHub.
+2. Render dashboard → **New → Web Service**, connect the repo.
+3. Settings: **Build Command** `npm install`, **Start Command** `node server.js`,
+   instance type Free or higher.
+4. **Environment** → add:
+   - `MONGODB_URI` (from step 1)
+   - `SESSION_SECRET` (long random string)
+   - `ALLOWED_ORIGINS` → `https://<your-vercel-app>.vercel.app`
+   - `NODE_ENV` → `production`
+   - `API_BASE_URL` → `https://<your-render-app>.onrender.com`
+5. Deploy, then confirm `https://<your-render-app>.onrender.com/config.js`
+   prints `window.APP_API_BASE = "https://<your-render-app>.onrender.com";`.
+
+### 3. Vercel (frontend)
+
+1. Vercel dashboard → **Add New → Project**, connect the same repo.
+2. **Root Directory: `public`** (this folder contains the SPA plus
+   `vercel.json` and the `api/config.js` lambda).
+3. **Environment Variables** → add `API_BASE_URL` with the Render URL from
+   step 2 (no trailing slash).
+4. Deploy. Open the site — the SPA loads `/config.js` from Vercel and calls the
+   Render API with your session cookie.
+
+> Changing domains later? Update `API_BASE_URL` on Vercel *and*
+> `ALLOWED_ORIGINS` on Render, then redeploy. Cookie-based auth needs the two
+> to agree.
+
+### Verify
+
+- Sign in as a demo client (`alex@example.com` / `DemoPass1`) from the Vercel
+  URL and browse the Dashboard, Expense Tracker, Habit Tracker, Savings Goals
+  and Wealth Analytics. Log an expense and an asset value, then check the
+  Admin Panel (`sambitkusahoo089@gmail.com` / `sam@1234`) shows the activity.
 
 ## Security & validation
 
 - **Passwords**: hashed with bcrypt (cost 10). Registration enforces email
   format, name length, and 8+ char passwords with letters + numbers.
-- **Sessions**: httpOnly, SameSite=Lax cookies (7-day), secret persisted in
-  `data/session-secret`. Sessions survive restarts.
-- **CSRF**: every state-changing request is rejected unless the `Origin`/
-  `Referer` host matches the server host.
+- **Sessions**: httpOnly cookies (`SameSite=None; Secure` in production),
+  stored in MongoDB with a 7-day TTL index. Signing secret via `SESSION_SECRET`.
+- **CSRF**: every state-changing request is rejected unless the
+  `Origin`/`Referer` host matches the server host *or* the configured
+  `ALLOWED_ORIGINS` (the Vercel SPA).
+- **CORS**: preflights and credential headers are handled only for whitelisted
+  origins (see `cors()` in `src/middleware.js`).
 - **Rate limiting**: sign-in attempts are limited per email + IP (8 tries /
   15 minutes) with lockout messaging.
 - **Role guards**: `/api/admin/*` requires the admin role; every other route is
@@ -71,27 +170,29 @@ Set `PORT=4000 npm start` to change the port. Data is stored in `data/freebuff.d
 
 Every figure in the demo data is realistic (rent, groceries, salary, brokerage
 and 401(k) balances, etc.) — no Lorem Ipsum or `$1` filler. Money is stored as
-integer **cents** to avoid floating-point drift, and client-side SVGs are
-hand-drawn (no chart-library dependency).
+integer **cents** to avoid floating-point drift, client-side SVGs are
+hand-drawn (no chart-library dependency), and multi-document writes are not
+used — every mutation is a single targeted update.
 
 ## Code structure
 
-Request flow: the browser loads the SPA from `public/`; every interaction calls a
-REST endpoint under `/api/*`, which `server.js` routes into `src/routes/`; routes
-read/write the SQLite database created by `src/db.js`. There is no build step.
+Request flow: the SPA (on Vercel) reads `window.APP_API_BASE` from
+`/config.js`, then every interaction calls a REST endpoint under `/api/*` on
+the Render server, which `server.js` routes into `src/routes/`; routes read and
+write MongoDB collections (created and indexed by `src/db.js`). There is no
+build step.
 
 ```text
-freebuff-desktop/
+wealthhabit/
 ├── server.js                     # Express entry point (see below)
 ├── package.json                  # Dependencies + npm scripts (start / dev / seed)
-├── package-lock.json             # Locked dependency versions
 ├── README.md                     # This file
-├── .gitignore                    # Excludes node_modules/, data/, .freebuff/, logs
 │
-├── src/                          # ── BACKEND ────────────────────────────
-│   ├── db.js                     # SQLite schema, money helpers, seed data
+├── src/                          # ── API SERVER (Render) ─────────────
+│   ├── db.js                     # Mongo connect, indexes, seed data, money helpers
+│   ├── session-store.js          # express-session store backed by MongoDB
 │   ├── helpers.js                # Shared constants + validation functions
-│   ├── middleware.js             # Auth guards, CSRF check, login rate limit
+│   ├── middleware.js             # Auth guards, CORS, CSRF allow-list, login rate limit
 │   ├── analytics.js              # Net worth series & monthly aggregates
 │   └── routes/                   # ── API route handlers (one per module) ──
 │       ├── auth.js               # POST register/login/logout, GET me
@@ -103,53 +204,39 @@ freebuff-desktop/
 │       ├── wealth.js             # Asset CRUD + net-worth/allocation data
 │       └── admin.js              # Platform metrics, users, feedback inbox
 │
-├── public/                       # ── FRONTEND (SPA, no build step) ────────
-│   ├── index.html                # Single page shell that loads all JS below
-│   ├── css/
-│   │   └── styles.css            # Entire dark, responsive design system
-│   └── js/
-│       ├── api.js                # Fetch wrapper (JSON, errors, 401 redirect)
-│       ├── ui.js                 # Toasts, modals, money/date formats, icons
-│       ├── charts.js             # Hand-drawn SVG charts (line/bar/donut)
-│       ├── router.js             # Hash router, app shell, sidebar, boot logic
-│       └── pages/                # ── One file per screen ─────────────────
-│           ├── auth.js           # Login page (Client vs Admin role selector)
-│           ├── dashboard.js      # Home dashboard
-│           ├── expenses.js       # Expense Tracker (+ income tab, CSV export)
-│           ├── habits.js         # Habit Tracker
-│           ├── goals.js          # Savings Goals
-│           ├── wealth.js         # Wealth Analytics
-│           └── admin.js          # Admin Panel
-│
-└── data/                         # ── Generated at runtime (gitignored) ──
-    ├── freebuff.db               # SQLite database, auto-created & seeded
-    └── session-secret            # Cookie-signing secret, generated on first run
+└── public/                       # ── SPA (Vercel, Root Directory = public) ──
+    ├── index.html                # Single page shell that loads all JS below
+    ├── vercel.json               # Rewrites /config.js → /api/config (lambda)
+    ├── api/config.js             # Vercel lambda: serves window.APP_API_BASE
+    ├── css/styles.css            # Entire dark, responsive design system
+    └── js/
+        ├── api.js                # Fetch wrapper (configurable API base, 401 redirect)
+        ├── ui.js                 # Toasts, modals, money/date formats, icons
+        ├── charts.js             # Hand-drawn SVG charts (line/bar/donut)
+        ├── router.js             # Hash router, app shell, sidebar, boot logic
+        └── pages/                # ── One file per screen ─────────────────
+            ├── auth.js           # Login page (Client vs Admin role selector)
+            ├── dashboard.js      # Home dashboard
+            ├── expenses.js       # Expense Tracker (+ income tab, CSV export)
+            ├── habits.js         # Habit Tracker
+            ├── goals.js          # Savings Goals
+            ├── wealth.js         # Wealth Analytics
+            └── admin.js          # Admin Panel
 ```
 
 ### What each file does
 
 | File | Responsibility |
 | --- | --- |
-| `server.js` | Boots Express, seeds the DB on first run, configures sessions & CSRF, serves `/api/*` route modules, serves the SPA from `public/`, central error handler. Listens on `PORT` (default 3000). |
-| `src/db.js` | Defines all SQLite tables (users, income_sources, expenses, habits, habit_completions, goals, assets, feedback), integer-cents helpers, and the transactional seed with realistic demo data + the single admin account. |
+| `server.js` | Boots Mongo + indexes, seeds on first run, mounts the MongoDB session store, CORS + CSRF guards, serves `/api/*` route modules, serves `/config.js` and the SPA from `public/`, central error handler. Listens on `PORT` (default 3000). |
+| `src/db.js` | Connects to `MONGODB_URI`, creates all collections + indexes (unique email, unique habit completion per date, TTL sessions index), and the transactional seed with realistic demo data + the single admin account. |
+| `src/session-store.js` | Minimal persistent `express-session` store over the `sessions` collection (no extra dependency; TTL index expires rows). |
 | `src/helpers.js` | Category/type/currency constants plus shared validation (`cleanStr`, `parseAmountCents`, `isValidDate`, email checks). |
-| `src/middleware.js` | `requireAuth` / `requireAdmin` guards, same-origin CSRF check for POST/PUT/DELETE, per-email login rate limiter. |
-| `src/analytics.js` | Pure aggregation used by dashboard & wealth routes: latest per-account net worth, month-by-month net-worth series, monthly income/expense totals, spending breakdown, month list. |
-| `src/routes/auth.js` | Registration (rejects the reserved admin email), login (rate-limited, suspension-aware), logout, session lookup. |
-| `src/routes/user.js` | Profile get/update, password change, feedback submission — all ownership-scoped. |
-| `src/routes/dashboard.js` | Combines net worth, current-month income/spending/savings-rate, top goals, habits due today, recent expenses. |
-| `src/routes/expenses.js` | CRUD for expenses & income sources with month filtering; every row is checked against the signed-in user. |
-| `src/routes/habits.js` | Habit CRUD, per-date completion toggle, streak & completion-rate math per frequency (day/week/month). |
-| `src/routes/goals.js` | Goal CRUD with target/current/deadline/color, and add/withdraw contributions that can't exceed the target or go negative. |
-| `src/routes/wealth.js` | Asset CRUD; returns latest valuation per account plus allocation and the 12-month net-worth series. |
-| `src/routes/admin.js` | Admin-only: platform metrics, registration-growth & spending data, user list with suspend/reactivate, feedback resolution. |
-| `public/index.html` | Marks-up the three mount points (`#app`, `#modal-root`, `#toasts`) and includes every script in load order. |
-| `public/css/styles.css` | Dark high-contrast theme via CSS variables; mobile-first layout, drawer nav, responsive stacked tables, bottom-sheet modals. |
-| `public/js/api.js` | One `api()` fetch helper: JSON in/out, throws server errors, redirects to login on 401. |
-| `public/js/ui.js` | Global `App` state, HTML escaping, toasts, modal/confirm helpers, currency/date formatting, category/asset-type color maps. |
-| `public/js/charts.js` | Dependency-free SVG line, bar, donut and sparkline charts; re-renders on resize and reads theme colors from CSS variables. |
-| `public/js/router.js` | Hash routing (`#/`, `#/expenses`, …), auth gate + admin gate, renders the sidebar/topbar shell, hosts profile & feedback modals. |
-| `public/js/pages/*.js` | One page per screen: fetch its data, render into `#view`, bind actions (each page mirrors its matching route file 1-to-1). |
+| `src/middleware.js` | `requireAuth` / `requireAdmin` guards, `cors()` + `sameOrigin()` CSRF (with `ALLOWED_ORIGINS` allow-list), per-email login rate limiter, `wrap()` for async handlers. |
+| `src/analytics.js` | Pure aggregations used by dashboard & wealth routes: latest per-account net worth, month-by-month net-worth series, monthly income/expense totals, spending breakdown, month list. |
+| `public/api/config.js` | Vercel lambda answering `/config.js` with `window.APP_API_BASE` from the `API_BASE_URL` env var. |
+| `public/vercel.json` | Maps `/config.js` to that lambda. The Express server answers the same path itself, so local dev and direct Render access work with no Vercel. |
+| `public/js/api.js` | One `api()` fetch helper: reads `window.APP_API_BASE` from `/config.js`, sends credentials cross-site, throws server errors, redirects to login on 401. |
 
 **Naming convention:** every screen under `public/js/pages/` has a matching API
 module under `src/routes/` (e.g. `expenses.js` ↔ `src/routes/expenses.js`), so a

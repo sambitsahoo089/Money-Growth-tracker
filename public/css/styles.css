@@ -192,6 +192,12 @@ h1, h2, h3 { line-height: 1.25; }
   .main { padding: 26px 28px 48px; }
   body { padding-left: var(--sidebar-w); }
   .app-shell { max-width: 1200px; }
+  /* Login page only: the sidebar's left padding would shift the card right,
+     so cancel it and span the full viewport to keep it dead-centered. */
+  .auth-root {
+    margin-left: calc(-1 * var(--sidebar-w));
+    width: calc(100% + var(--sidebar-w));
+  }
 }
 
 /* ------------------------------------------------------------ */

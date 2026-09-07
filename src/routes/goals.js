@@ -5,8 +5,8 @@
 'use strict';
 
 const express = require('express');
-const { db, toDollars, todayISO } = require('../db');
-const { requireAuth } = require('../middleware');
+const { col, oid, toDollars, todayISO } = require('../db');
+const { requireAuth, wrap } = require('../middleware');
 const { cleanStr, isValidDate, parseAmountCents, bad } = require('../helpers');
 
 const router = express.Router();
@@ -19,7 +19,7 @@ function goalOut(g) {
   let daysLeft = null;
   if (g.deadline) daysLeft = Math.ceil((new Date(g.deadline + 'T23:59:59') - new Date()) / 86400000);
   return {
-    id: g.id,
+    id: String(g._id),
     name: g.name,
     target: toDollars(g.target_cents),
     current: toDollars(g.current_cents),
@@ -31,14 +31,14 @@ function goalOut(g) {
   };
 }
 
-router.get('/', (req, res) => {
-  const goals = db.prepare('SELECT * FROM goals WHERE user_id = ? ORDER BY created_at').all(req.session.userId).map(goalOut);
+router.get('/', wrap(async (req, res) => {
+  const goals = (await col('goals').find({ user_id: oid(req.session.userId) }).sort({ created_at: 1 }).toArray()).map(goalOut);
   const totalTarget = goals.reduce((s, g) => s + g.target, 0);
   const totalCurrent = goals.reduce((s, g) => s + g.current, 0);
   return res.json({ goals, totals: { target: totalTarget, current: totalCurrent, percent: totalTarget > 0 ? Math.round((totalCurrent / totalTarget) * 100) : 0 } });
-});
+}));
 
-router.post('/', (req, res) => {
+router.post('/', wrap(async (req, res) => {
   const name = cleanStr(req.body.name, 80);
   const target = parseAmountCents(req.body.target);
   const current = req.body.current === undefined || req.body.current === '' ? 0 : parseAmountCents(req.body.current);
@@ -52,14 +52,16 @@ router.post('/', (req, res) => {
   if (deadline && !isValidDate(deadline)) return bad(res, 'Please enter a valid deadline date.');
   if (deadline && deadline < todayISO()) return bad(res, 'Deadline cannot be in the past.');
 
-  const res2 = db.prepare('INSERT INTO goals (user_id, name, target_cents, current_cents, deadline, color, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(req.session.userId, name, target, current, deadline, color, new Date().toISOString());
-  return res.status(201).json({ ok: true, id: Number(res2.lastInsertRowid), message: 'Goal created. Future you says thanks!' });
-});
+  const res2 = await col('goals').insertOne({
+    user_id: oid(req.session.userId), name, target_cents: target, current_cents: current, deadline, color,
+    created_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ ok: true, id: String(res2.insertedId), message: 'Goal created. Future you says thanks!' });
+}));
 
-router.put('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const g = db.prepare('SELECT * FROM goals WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.put('/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const g = id && await col('goals').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!g) return bad(res, 'Goal not found.', 404);
 
   const name = cleanStr(req.body.name, 80);
@@ -75,23 +77,22 @@ router.put('/:id', (req, res) => {
   if (deadline && !isValidDate(deadline)) return bad(res, 'Please enter a valid deadline date.');
   if (deadline && deadline < todayISO()) return bad(res, 'Deadline cannot be in the past.');
 
-  db.prepare('UPDATE goals SET name = ?, target_cents = ?, current_cents = ?, deadline = ?, color = ? WHERE id = ?')
-    .run(name, target, current, deadline, color, id);
+  await col('goals').updateOne({ _id: id }, { $set: { name, target_cents: target, current_cents: current, deadline, color } });
   return res.json({ ok: true, message: 'Goal updated.' });
-});
+}));
 
-router.delete('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const g = db.prepare('SELECT id FROM goals WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.delete('/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const g = id && await col('goals').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!g) return bad(res, 'Goal not found.', 404);
-  db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+  await col('goals').deleteOne({ _id: id });
   return res.json({ ok: true, message: 'Goal removed.' });
-});
+}));
 
 /** Add (or subtract, for negative amounts) money to a goal. */
-router.post('/:id/contribute', (req, res) => {
-  const id = Number(req.params.id);
-  const g = db.prepare('SELECT * FROM goals WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.post('/:id/contribute', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const g = id && await col('goals').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!g) return bad(res, 'Goal not found.', 404);
 
   const raw = typeof req.body.amount === 'string' ? req.body.amount.replace(/[,$\s]/g, '') : req.body.amount;
@@ -104,8 +105,8 @@ router.post('/:id/contribute', (req, res) => {
   if (next < 0) return bad(res, 'Contribution would make the saved amount negative.');
   if (next > g.target_cents) return bad(res, `This goal's target is ${toDollars(g.target_cents).toFixed(2)} — add at most ${toDollars(g.target_cents - g.current_cents).toFixed(2)} more.`);
 
-  db.prepare('UPDATE goals SET current_cents = ? WHERE id = ?').run(next, id);
+  await col('goals').updateOne({ _id: id }, { $set: { current_cents: next } });
   return res.json({ ok: true, message: delta > 0 ? `Contributed ${toDollars(delta).toFixed(2)}. 🎉` : `Withdrew ${toDollars(-delta).toFixed(2)}.` });
-});
+}));
 
 module.exports = router;

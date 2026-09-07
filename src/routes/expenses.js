@@ -5,8 +5,8 @@
 'use strict';
 
 const express = require('express');
-const { db, toDollars } = require('../db');
-const { requireAuth } = require('../middleware');
+const { col, oid, toDollars } = require('../db');
+const { requireAuth, wrap } = require('../middleware');
 const {
   EXPENSE_CATEGORIES, INCOME_CATEGORIES, cleanStr,
   isValidDate, parseAmountCents, bad,
@@ -17,36 +17,40 @@ const router = express.Router();
 router.use(requireAuth);
 
 const DATE_RE = /^\d{4}-\d{2}$/;
+const outId = (doc) => String(doc._id);
+const toUserId = (s) => oid(s); // route-level user ids come from the session
+
+function expenseOut(e) {
+  return {
+    id: outId(e), amount: toDollars(e.amount_cents), category: e.category,
+    description: e.description, date: e.date,
+  };
+}
 
 /* ----------------------------- Expenses ----------------------------- */
 
-router.get('/expenses', (req, res) => {
-  const uid = req.session.userId;
+router.get('/expenses', wrap(async (req, res) => {
+  const uid = toUserId(req.session.userId);
   const month = DATE_RE.test(req.query.month) ? req.query.month : currentMonth();
   const category = typeof req.query.category === 'string' && EXPENSE_CATEGORIES.includes(req.query.category) ? req.query.category : null;
 
-  let sql = 'SELECT * FROM expenses WHERE user_id = ? AND date LIKE ?';
-  const params = [uid, `${month}%`];
-  if (category) { sql += ' AND category = ?'; params.push(category); }
-  sql += ' ORDER BY date DESC, id DESC';
+  const filter = { user_id: uid, date: { $regex: `^${month}` } };
+  if (category) filter.category = category;
 
-  const expenses = db.prepare(sql).all(...params).map((e) => ({
-    id: e.id, amount: toDollars(e.amount_cents), category: e.category,
-    description: e.description, date: e.date,
-  }));
+  const expenses = (await col('expenses').find(filter).sort({ date: -1, _id: -1 }).toArray()).map(expenseOut);
 
   return res.json({
     month,
-    months: activityMonths(uid),
+    months: await activityMonths(req.session.userId),
     expenses,
     summary: {
-      total: monthlyExpenses(uid, month),
-      byCategory: expenseBreakdown(uid, month),
+      total: await monthlyExpenses(req.session.userId, month),
+      byCategory: await expenseBreakdown(req.session.userId, month),
     },
   });
-});
+}));
 
-router.post('/expenses', (req, res) => {
+router.post('/expenses', wrap(async (req, res) => {
   const amount = parseAmountCents(req.body.amount);
   const category = EXPENSE_CATEGORIES.includes(req.body.category) ? req.body.category : null;
   const description = typeof req.body.description === 'string' ? req.body.description.trim().slice(0, 300) : '';
@@ -57,14 +61,16 @@ router.post('/expenses', (req, res) => {
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
   if (date > new Date().toISOString().slice(0, 10)) return bad(res, 'Expense date cannot be in the future.');
 
-  const res2 = db.prepare('INSERT INTO expenses (user_id, amount_cents, category, description, date, created_at) VALUES (?,?,?,?,?,?)')
-    .run(req.session.userId, amount, category, description, date, new Date().toISOString());
-  return res.status(201).json({ ok: true, id: Number(res2.lastInsertRowid), message: 'Expense logged.' });
-});
+  const res2 = await col('expenses').insertOne({
+    user_id: toUserId(req.session.userId), amount_cents: amount, category, description, date,
+    created_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ ok: true, id: String(res2.insertedId), message: 'Expense logged.' });
+}));
 
-router.put('/expenses/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM expenses WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.put('/expenses/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('expenses').findOne({ _id: id, user_id: toUserId(req.session.userId) });
   if (!existing) return bad(res, 'Expense not found.', 404);
 
   const amount = parseAmountCents(req.body.amount);
@@ -75,31 +81,37 @@ router.put('/expenses/:id', (req, res) => {
   if (!category) return bad(res, 'Please choose a valid category.');
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
 
-  db.prepare('UPDATE expenses SET amount_cents = ?, category = ?, description = ?, date = ? WHERE id = ?')
-    .run(amount, category, description, date, id);
+  await col('expenses').updateOne({ _id: id }, { $set: { amount_cents: amount, category, description, date } });
   return res.json({ ok: true, message: 'Expense updated.' });
-});
+}));
 
-router.delete('/expenses/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM expenses WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.delete('/expenses/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('expenses').findOne({ _id: id, user_id: toUserId(req.session.userId) });
   if (!existing) return bad(res, 'Expense not found.', 404);
-  db.prepare('DELETE FROM expenses WHERE id = ?').run(id);
+  await col('expenses').deleteOne({ _id: id });
   return res.json({ ok: true, message: 'Expense deleted.' });
-});
+}));
 
 /* ------------------------------ Income ------------------------------ */
 
-router.get('/income', (req, res) => {
-  const rows = db.prepare('SELECT * FROM income_sources WHERE user_id = ? ORDER BY frequency = \'monthly\' DESC, date DESC').all(req.session.userId)
-    .map((i) => ({
-      id: i.id, name: i.name, amount: toDollars(i.amount_cents),
+router.get('/income', wrap(async (req, res) => {
+  const rows = await col('income_sources').find({ user_id: toUserId(req.session.userId) }).toArray();
+  // Order: monthly sources first, then date desc (matches the SQL ORDER BY frequency = 'monthly' DESC, date DESC)
+  rows.sort((a, b) => {
+    if (a.frequency === 'monthly' && b.frequency !== 'monthly') return -1;
+    if (b.frequency === 'monthly' && a.frequency !== 'monthly') return 1;
+    return a.date < b.date ? 1 : a.date > b.date ? -1 : 0;
+  });
+  return res.json({
+    income: rows.map((i) => ({
+      id: outId(i), name: i.name, amount: toDollars(i.amount_cents),
       category: i.category, frequency: i.frequency, date: i.date,
-    }));
-  return res.json({ income: rows });
-});
+    })),
+  });
+}));
 
-router.post('/income', (req, res) => {
+router.post('/income', wrap(async (req, res) => {
   const name = cleanStr(req.body.name, 80);
   const amount = parseAmountCents(req.body.amount);
   const category = INCOME_CATEGORIES.includes(req.body.category) ? req.body.category : null;
@@ -111,14 +123,16 @@ router.post('/income', (req, res) => {
   if (!category) return bad(res, 'Please choose a valid category.');
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
 
-  const res2 = db.prepare('INSERT INTO income_sources (user_id, name, amount_cents, category, frequency, date, created_at) VALUES (?,?,?,?,?,?,?)')
-    .run(req.session.userId, name, amount, category, frequency, date, new Date().toISOString());
-  return res.status(201).json({ ok: true, id: Number(res2.lastInsertRowid), message: 'Income source added.' });
-});
+  const res2 = await col('income_sources').insertOne({
+    user_id: toUserId(req.session.userId), name, amount_cents: amount, category, frequency, date,
+    created_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ ok: true, id: String(res2.insertedId), message: 'Income source added.' });
+}));
 
-router.put('/income/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM income_sources WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.put('/income/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('income_sources').findOne({ _id: id, user_id: toUserId(req.session.userId) });
   if (!existing) return bad(res, 'Income source not found.', 404);
 
   const name = cleanStr(req.body.name, 80);
@@ -131,17 +145,16 @@ router.put('/income/:id', (req, res) => {
   if (!category) return bad(res, 'Please choose a valid category.');
   if (!isValidDate(date)) return bad(res, 'Please enter a valid date.');
 
-  db.prepare('UPDATE income_sources SET name = ?, amount_cents = ?, category = ?, frequency = ?, date = ? WHERE id = ?')
-    .run(name, amount, category, frequency, date, id);
+  await col('income_sources').updateOne({ _id: id }, { $set: { name, amount_cents: amount, category, frequency, date } });
   return res.json({ ok: true, message: 'Income source updated.' });
-});
+}));
 
-router.delete('/income/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM income_sources WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.delete('/income/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('income_sources').findOne({ _id: id, user_id: toUserId(req.session.userId) });
   if (!existing) return bad(res, 'Income source not found.', 404);
-  db.prepare('DELETE FROM income_sources WHERE id = ?').run(id);
+  await col('income_sources').deleteOne({ _id: id });
   return res.json({ ok: true, message: 'Income source deleted.' });
-});
+}));
 
 module.exports = router;

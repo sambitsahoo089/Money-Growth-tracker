@@ -19,27 +19,84 @@ function requireAdmin(req, res, next) {
 }
 
 /* ------------------------------------------------------------------ */
-/* CSRF protection — enforce same-origin for state-changing requests   */
+/* Async route wrapper — Express 4 does not catch rejected promises.   */
+/* ------------------------------------------------------------------ */
+
+function wrap(fn) {
+  return (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
+}
+
+/* ------------------------------------------------------------------ */
+/* CORS — the SPA may be hosted on a different origin (e.g. Vercel)    */
+/* while the API lives here (Render). Cookies are sent cross-site, so  */
+/* preflight + credentials must be handled explicitly.                 */
 /* ------------------------------------------------------------------ */
 
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+let allowedOrigins = []; // list of origin hosts (no protocol, no trailing slash)
+
+/** Configure which origins may call this API. Call once at boot. */
+function setAllowedOrigins(origins) {
+  allowedOrigins = (origins || [])
+    .map((o) => String(o).trim().toLowerCase())
+    .filter(Boolean)
+    .map((o) => o.replace(/^https?:\/\//, '').replace(/\/+$/, ''));
+}
+
+function originAllowed(originHost) {
+  if (!originHost) return false;
+  const host = originHost.toLowerCase();
+  return allowedOrigins.includes(host);
+}
+
+/**
+ * CORS middleware: answers preflights and decorates responses with the
+ * correct allow headers when the request comes from an allowed origin.
+ */
+function cors(req, res, next) {
+  const origin = req.headers.origin;
+  if (origin) {
+    let originHost;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      return res.status(403).json({ error: 'Request origin could not be verified.' });
+    }
+    if (originAllowed(originHost)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Max-Age', '86400');
+      if (req.method === 'OPTIONS') return res.sendStatus(204);
+    }
+  }
+  return next();
+}
+
+/* ------------------------------------------------------------------ */
+/* CSRF protection — reject state-changing requests from origins that  */
+/* are neither this server nor the configured SPA origin(s).           */
+/* ------------------------------------------------------------------ */
 
 function sameOrigin(req, res, next) {
   if (!MUTATING_METHODS.has(req.method)) return next();
   const origin = req.headers.origin || req.headers.referer;
   if (!origin) return next(); // non-browser client (curl, tests) — allowed
-  let host;
+  let originHost;
   try {
-    host = new URL(origin).host;
+    originHost = new URL(origin).host;
   } catch {
     return res.status(403).json({ error: 'Request origin could not be verified.' });
   }
-  if (host === req.headers.host) return next();
+  if (originHost === req.headers.host || originAllowed(originHost)) return next();
   return res.status(403).json({ error: 'Cross-origin request rejected.' });
 }
 
 /* ------------------------------------------------------------------ */
-/* Login rate limiting (in-memory)                                     */
+/* Login rate limiting (in-memory — fine for a single-instance deploy) */
 /* ------------------------------------------------------------------ */
 
 const attempts = new Map(); // key -> { count, resetAt }
@@ -78,4 +135,14 @@ function recordLoginSuccess(req) {
   if (req.loginAttempt) attempts.delete(`${req.ip || 'unknown'}|${String(req.body && req.body.email || '').toLowerCase().trim()}`);
 }
 
-module.exports = { requireAuth, requireAdmin, sameOrigin, loginRateLimit, recordLoginFailure, recordLoginSuccess };
+module.exports = {
+  requireAuth,
+  requireAdmin,
+  wrap,
+  cors,
+  setAllowedOrigins,
+  sameOrigin,
+  loginRateLimit,
+  recordLoginFailure,
+  recordLoginSuccess,
+};

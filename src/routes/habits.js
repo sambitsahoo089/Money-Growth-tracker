@@ -5,18 +5,19 @@
 'use strict';
 
 const express = require('express');
-const { db, todayISO } = require('../db');
-const { requireAuth } = require('../middleware');
+const { col, oid, todayISO } = require('../db');
+const { requireAuth, wrap } = require('../middleware');
 const { FREQUENCIES, cleanStr, isValidDate, bad } = require('../helpers');
 
 const router = express.Router();
 router.use(requireAuth);
 
+const outId = (doc) => String(doc._id);
+
 /** Full habit stats: streaks + 35-day completion calendar. */
-function habitWithStats(h) {
-  const dates = new Set(
-    db.prepare('SELECT date FROM habit_completions WHERE habit_id = ? AND user_id = ?').all(h.id, h.user_id).map((r) => r.date)
-  );
+async function habitWithStats(h) {
+  const completions = await col('habit_completions').find({ habit_id: h._id, user_id: h.user_id }).toArray();
+  const dates = new Set(completions.map((r) => r.date));
   const today = todayISO();
 
   let currentStreak = 0;
@@ -66,7 +67,7 @@ function habitWithStats(h) {
   }
 
   return {
-    id: h.id,
+    id: outId(h),
     name: h.name,
     frequency: h.frequency,
     unit: h.frequency === 'daily' ? 'day' : h.frequency === 'weekly' ? 'week' : 'month',
@@ -83,58 +84,67 @@ function habitWithStats(h) {
   };
 }
 
-router.get('/', (req, res) => {
-  const habits = db.prepare('SELECT * FROM habits WHERE user_id = ? AND archived = 0 ORDER BY created_at').all(req.session.userId);
-  return res.json({ habits: habits.map(habitWithStats) });
-});
+router.get('/', wrap(async (req, res) => {
+  const habits = await col('habits').find({ user_id: oid(req.session.userId), archived: 0 }).sort({ created_at: 1 }).toArray();
+  const withStats = [];
+  for (const h of habits) withStats.push(await habitWithStats(h));
+  return res.json({ habits: withStats });
+}));
 
-router.post('/', (req, res) => {
+router.post('/', wrap(async (req, res) => {
   const name = cleanStr(req.body.name, 80);
   const frequency = FREQUENCIES.includes(req.body.frequency) ? req.body.frequency : 'daily';
   if (!name) return bad(res, 'Please enter a habit name (2–80 characters).');
   const reminder = req.body.reminder ? 1 : 0;
-  const res2 = db.prepare('INSERT INTO habits (user_id, name, frequency, reminder, archived, created_at) VALUES (?,?,?,?,?,?)')
-    .run(req.session.userId, name, frequency, reminder, 0, new Date().toISOString());
-  return res.status(201).json({ ok: true, id: Number(res2.lastInsertRowid), message: 'Habit created. Consistency is a superpower!' });
-});
+  const res2 = await col('habits').insertOne({
+    user_id: oid(req.session.userId), name, frequency, reminder, archived: 0,
+    created_at: new Date().toISOString(),
+  });
+  return res.status(201).json({ ok: true, id: String(res2.insertedId), message: 'Habit created. Consistency is a superpower!' });
+}));
 
-router.put('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM habits WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.put('/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('habits').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!existing) return bad(res, 'Habit not found.', 404);
   const name = cleanStr(req.body.name, 80);
   const frequency = FREQUENCIES.includes(req.body.frequency) ? req.body.frequency : 'daily';
   if (!name) return bad(res, 'Please enter a habit name (2–80 characters).');
   const reminder = req.body.reminder ? 1 : 0;
-  db.prepare('UPDATE habits SET name = ?, frequency = ?, reminder = ? WHERE id = ?').run(name, frequency, reminder, id);
+  await col('habits').updateOne({ _id: id }, { $set: { name, frequency, reminder } });
   return res.json({ ok: true, message: 'Habit updated.' });
-});
+}));
 
-router.delete('/:id', (req, res) => {
-  const id = Number(req.params.id);
-  const existing = db.prepare('SELECT id FROM habits WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.delete('/:id', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const existing = id && await col('habits').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!existing) return bad(res, 'Habit not found.', 404);
-  db.prepare('DELETE FROM habit_completions WHERE habit_id = ?').run(id);
-  db.prepare('DELETE FROM habits WHERE id = ?').run(id);
+  await Promise.all([
+    col('habit_completions').deleteMany({ habit_id: id }),
+    col('habits').deleteOne({ _id: id }),
+  ]);
   return res.json({ ok: true, message: 'Habit deleted.' });
-});
+}));
 
 /** Toggle completion for a date (defaults to today). */
-router.post('/:id/toggle', (req, res) => {
-  const id = Number(req.params.id);
-  const habit = db.prepare('SELECT * FROM habits WHERE id = ? AND user_id = ?').get(id, req.session.userId);
+router.post('/:id/toggle', wrap(async (req, res) => {
+  const id = oid(req.params.id);
+  const habit = id && await col('habits').findOne({ _id: id, user_id: oid(req.session.userId) });
   if (!habit) return bad(res, 'Habit not found.', 404);
   const date = typeof req.body.date === 'string' && req.body.date ? req.body.date : todayISO();
   if (!isValidDate(date)) return bad(res, 'Invalid date.');
   if (date > todayISO()) return bad(res, 'Cannot mark a future date.');
 
-  const existing = db.prepare('SELECT id FROM habit_completions WHERE habit_id = ? AND user_id = ? AND date = ?').get(id, req.session.userId, date);
-  if (existing) {
-    db.prepare('DELETE FROM habit_completions WHERE id = ?').run(existing.id);
+  const result = await col('habit_completions').updateOne(
+    { habit_id: id, user_id: oid(req.session.userId), date },
+    { $setOnInsert: {} },
+    { upsert: true },
+  );
+  if (result.upsertedCount === 0) {
+    await col('habit_completions').deleteOne({ habit_id: id, user_id: oid(req.session.userId), date });
     return res.json({ ok: true, done: false, message: 'Marked as not done.' });
   }
-  db.prepare('INSERT OR IGNORE INTO habit_completions (habit_id, user_id, date) VALUES (?,?,?)').run(id, req.session.userId, date);
   return res.json({ ok: true, done: true, message: 'Nice! One step closer to the streak. 🔥' });
-});
+}));
 
 module.exports = router;

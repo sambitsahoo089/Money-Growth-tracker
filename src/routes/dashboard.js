@@ -5,20 +5,26 @@
 'use strict';
 
 const express = require('express');
-const { db, toDollars, todayISO } = require('../db');
-const { requireAuth } = require('../middleware');
+const { col, oid, toDollars, todayISO } = require('../db');
+const { requireAuth, wrap } = require('../middleware');
 const { currentNetWorth, netWorthSeries, monthlyIncome, monthlyExpenses, expenseBreakdown, currentMonth } = require('../analytics');
 
 const router = express.Router();
 router.use(requireAuth);
 
-function habitStats(userId) {
-  const habits = db.prepare('SELECT * FROM habits WHERE user_id = ? AND archived = 0 ORDER BY created_at').all(userId);
-  const completions = db.prepare('SELECT habit_id, date FROM habit_completions WHERE user_id = ?').all(userId);
-  const byHabit = new Map();
+const outId = (doc) => String(doc._id);
+
+async function habitStats(userId) {
+  const uid = oid(userId);
+  const [habits, completions] = await Promise.all([
+    col('habits').find({ user_id: uid, archived: 0 }).sort({ created_at: 1 }).toArray(),
+    col('habit_completions').find({ user_id: uid }).toArray(),
+  ]);
+  const byHabit = new Map(); // habit id (string) -> Set of dates
   for (const c of completions) {
-    if (!byHabit.has(c.habit_id)) byHabit.set(c.habit_id, new Set());
-    byHabit.get(c.habit_id).add(c.date);
+    const key = String(c.habit_id);
+    if (!byHabit.has(key)) byHabit.set(key, new Set());
+    byHabit.get(key).add(c.date);
   }
 
   const today = todayISO();
@@ -26,7 +32,7 @@ function habitStats(userId) {
   const weekStart = (() => { const d = new Date(); d.setDate(d.getDate() - ((dow + 6) % 7)); return d.toISOString().slice(0, 10); })();
 
   return habits.map((h) => {
-    const dates = byHabit.get(h.id) || new Set();
+    const dates = byHabit.get(outId(h)) || new Set();
     const doneToday = dates.has(today);
 
     let currentStreak = 0;
@@ -73,7 +79,7 @@ function habitStats(userId) {
     const completionsThisMonth = [...dates].filter((d) => d.startsWith(today.slice(0, 7))).length;
 
     return {
-      id: h.id,
+      id: outId(h),
       name: h.name,
       frequency: h.frequency,
       reminder: !!h.reminder,
@@ -85,17 +91,23 @@ function habitStats(userId) {
   });
 }
 
-router.get('/', (req, res) => {
+router.get('/', wrap(async (req, res) => {
   const uid = req.session.userId;
   const month = currentMonth();
-  const income = monthlyIncome(uid, month);
-  const expenses = monthlyExpenses(uid, month);
+  const income = await monthlyIncome(uid, month);
+  const expenses = await monthlyExpenses(uid, month);
   const savingsRate = income.total > 0 ? Math.max(0, (income.total - expenses) / income.total) : 0;
 
-  const goals = db.prepare('SELECT * FROM goals WHERE user_id = ? ORDER BY (current_cents * 1.0 / target_cents) DESC').all(uid)
+  const [goals, habits, recent] = await Promise.all([
+    col('goals').find({ user_id: oid(uid) }).toArray(),
+    habitStats(uid),
+    col('expenses').find({ user_id: oid(uid) }).sort({ date: -1, _id: -1 }).limit(6).toArray(),
+  ]);
+  const topGoals = goals
+    .sort((a, b) => (b.current_cents / b.target_cents) - (a.current_cents / a.target_cents))
     .slice(0, 3)
     .map((g) => ({
-      id: g.id,
+      id: outId(g),
       name: g.name,
       target: toDollars(g.target_cents),
       current: toDollars(g.current_cents),
@@ -104,25 +116,22 @@ router.get('/', (req, res) => {
       color: g.color,
     }));
 
-  const habits = habitStats(uid);
   const habitsDue = habits.filter((h) => !h.doneToday);
 
-  const recent = db.prepare('SELECT * FROM expenses WHERE user_id = ? ORDER BY date DESC, id DESC LIMIT 6').all(uid)
-    .map((e) => ({ id: e.id, amount: toDollars(e.amount_cents), category: e.category, description: e.description, date: e.date }));
-
-  const netWorthSeriesData = netWorthSeries(uid, 6);
+  const recentOut = recent.map((e) => ({ id: outId(e), amount: toDollars(e.amount_cents), category: e.category, description: e.description, date: e.date }));
+  const netWorthSeriesData = await netWorthSeries(uid, 6);
 
   // Previous month for the delta stats
   const prevDate = new Date(); prevDate.setMonth(prevDate.getMonth() - 1);
   const prevMonth = `${prevDate.getFullYear()}-${String(prevDate.getMonth() + 1).padStart(2, '0')}`;
-  const prevExpenses = monthlyExpenses(uid, prevMonth);
-  const prevIncome = monthlyIncome(uid, prevMonth);
+  const prevExpenses = await monthlyExpenses(uid, prevMonth);
+  const prevIncome = await monthlyIncome(uid, prevMonth);
 
   const series = netWorthSeriesData;
   const netWorthDelta = series.length >= 2 ? series[series.length - 1].value - series[0].value : 0;
 
   return res.json({
-    netWorth: currentNetWorth(uid),
+    netWorth: await currentNetWorth(uid),
     netWorthDelta,
     netWorthSeries: series,
     income: income.total,
@@ -130,13 +139,13 @@ router.get('/', (req, res) => {
     prevExpenses,
     prevIncome,
     savingsRate,
-    goals,
+    goals: topGoals,
     habitsDue,
     habitsTotal: habits.length,
-    recent,
-    categoryBreakdown: expenseBreakdown(uid, month),
+    recent: recentOut,
+    categoryBreakdown: await expenseBreakdown(uid, month),
     month,
   });
-});
+}));
 
 module.exports = router;
