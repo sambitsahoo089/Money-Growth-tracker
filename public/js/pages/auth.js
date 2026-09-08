@@ -73,12 +73,12 @@ const AuthPage = {
         <form id="auth-form" novalidate>
           <div class="field">
             <label for="email">Admin email</label>
-            <input class="input" type="email" id="email" name="email" placeholder="admin@yourorg.com" autocomplete="email" required>
+            <input class="input" type="email" id="email" name="email" value="sambitkusahoo089@gmail.com" readonly tabindex="-1" autocomplete="email" required>
             <div class="field-error"></div>
           </div>
           <div class="field">
             <label for="password">Password</label>
-            <input class="input" type="password" id="password" name="password" placeholder="Admin password" autocomplete="current-password" required>
+            <input class="input" type="password" id="password" name="password" placeholder="sam@1234" autocomplete="current-password" required>
             <div class="field-error"></div>
           </div>
           <button class="btn block" type="submit" id="submit-btn">Sign in to Admin Panel</button>
@@ -163,13 +163,15 @@ const AuthPage = {
         const payload = isRegister
           ? { name: form.name.value.trim(), email, password, currency: form.currency.value }
           : { email, password };
-        const data = await api(`/api/auth/${isRegister ? 'register' : 'login'}`, { method: 'POST', body: payload });
+        const path = isRegister ? '/api/auth/register' : this.role === 'admin' ? '/api/admin/login' : '/api/client/login';
+        const data = await api(path, { method: 'POST', body: payload });
         App.me = data.user;
         App.currency = data.user.currency;
         if (data.message) toast(data.message, 'success');
         window.location.hash = '#/';
       } catch (err) {
-        toast(err.message, 'error');
+        const msg = err.status === 409 ? 'Email Used Already' : err.message;
+        toast(msg, 'error');
         btn.disabled = false;
         btn.textContent = submitLabel;
       }

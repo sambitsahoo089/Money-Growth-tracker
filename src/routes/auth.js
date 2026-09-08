@@ -16,14 +16,13 @@ const PASSWORD_RE = /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/;
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Precomputed bcrypt hash of the seeded admin password, resolved once at boot.
- *  Login compares the supplied password against this single stored hash — no
- *  per-request hashing of SEED_ADMIN_PASSWORD and no bcrypt work for any other
- *  email. If bcrypt fails to load on a platform, login still rejects safely. */
+ *  The admin tab compares the supplied password against this single stored hash —
+ *  no per-request hashing of SEED_ADMIN_PASSWORD and no bcrypt work for any other
+ *  email. If bcrypt fails to load on a platform, the admin account can't auth. */
 let ADMIN_PASSWORD_HASH = null;
 try {
   ADMIN_PASSWORD_HASH = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
 } catch (e) {
-  // If bcrypt isn't usable here, the admin account can't authenticate.
   console.error('WealthHabit: bcrypt could not hash the admin password at boot:', e.message);
 }
 
@@ -78,7 +77,40 @@ router.post('/register', wrap(async (req, res) => {
   return res.status(201).json({ user: publicUser(user), message: 'Account created. Welcome to WealthHabit!' });
 }));
 
-router.post('/login', loginRateLimit, wrap(async (req, res) => {
+// Admin sign-in — only the seeded admin email + password is accepted.
+// Any other email or password is rejected with a clear "wrong credentials"
+// message so the admin panel is reachable only with the provisioned account.
+router.post('/admin/login', loginRateLimit, wrap(async (req, res) => {
+  const email = cleanStr(req.body.email, 120);
+  const password = typeof req.body.password === 'string' ? req.body.password : '';
+  if (!email || !password) {
+    return bad(res, 'Please enter your email and password.');
+  }
+
+  if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()
+      || !ADMIN_PASSWORD_HASH
+      || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+    return bad(res, 'Wrong login credentials. The admin panel accepts only the provisioned admin account.');
+  }
+
+  const user = await findUserByEmail(SEED_ADMIN_EMAIL);
+  if (!user) {
+    return bad(res, 'The admin account is not set up. Please contact support.', 500);
+  }
+  if (user.suspended) {
+    return bad(res, 'This account has been suspended. Contact support@freebuff.app.', 403);
+  }
+
+  recordLoginSuccess(req);
+  await col('users').updateOne({ _id: user._id }, { $set: { last_login_at: new Date().toISOString() } });
+
+  req.session.userId = String(user._id);
+  req.session.role = user.role;
+  return res.json({ user: publicUser(user) });
+}));
+
+// Client sign-in — only previously created client accounts may log in.
+router.post('/client/login', loginRateLimit, wrap(async (req, res) => {
   const email = cleanStr(req.body.email, 120);
   const password = typeof req.body.password === 'string' ? req.body.password : '';
   if (!email || !password) {
@@ -86,19 +118,10 @@ router.post('/login', loginRateLimit, wrap(async (req, res) => {
     return bad(res, 'Please enter your email and password.');
   }
 
-  // Admin-only mode: only the seeded admin account may sign in.
-  if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()
-      || !ADMIN_PASSWORD_HASH
-      || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+  const user = await findUserByEmail(email);
+  if (!user || user.role !== 'client' || !bcrypt.compareSync(password, user.password_hash)) {
     recordLoginFailure(req);
-    return bad(res, 'That account is not recognized. The admin account is the only sign-in on this deployment.');
-  }
-
-  const user = await findUserByEmail(SEED_ADMIN_EMAIL);
-  if (!user) {
-    // Admin row missing (should not happen in a seeded deploy)
-    recordLoginFailure(req);
-    return bad(res, 'The admin account is not set up. Please contact support.', 500);
+    return bad(res, 'Wrong email or password. Check your details and try again.');
   }
   if (user.suspended) {
     recordLoginFailure(req);
