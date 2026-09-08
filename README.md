@@ -43,13 +43,17 @@ The database is seeded automatically on first boot and only when empty.
 │  Vercel (static SPA)│  ───────────────────────▶  │  Render (Express API)│ ─────▶ │ MongoDB Atlas    │
 │  public/            │  cookies + CORS allow-list │  server.js + src/    │        │ data + sessions  │
 └─────────────────────┘                            └──────────────────────┘        └──────────────────┘
-   /config.js (lambda)  → window.APP_API_BASE = https://your-api.onrender.com
+   /config.js (lambda)  → window.APP_API_BASE = ""   (same origin)
+   /api/* rewrites      → proxied to your-api.onrender.com
 ```
 
-- **Vercel** serves the static SPA from `public/`. A tiny lambda
-  (`public/api/config.js`) serves `/config.js`, which tells the SPA where the
-  API lives (`API_BASE_URL` env var). Vercel's project **Root Directory must be
-  `public`** so the SPA lands at `/` and the `/api/*` folder becomes functions.
+- **Vercel** serves the static SPA from `public/` **and proxies every `/api/*`
+  request to the Render API** (see the rewrite in `public/vercel.json`), so the
+  browser only ever talks to one website — the Vercel origin. A tiny lambda
+  (`public/api/config.js`) serves `/config.js` returning
+  `window.APP_API_BASE = ""`, keeping the SPA same-origin. Vercel's project
+  **Root Directory must be `public`** so the SPA lands at `/` and the rewrites
+  apply.
 - **Render** runs the whole Express server (`node server.js`): all `/api/*`
   routes, session management (MongoDB-backed store), CORS + CSRF handling for
   the Vercel origin, and it also serves the SPA itself, so opening the Render
@@ -57,9 +61,11 @@ The database is seeded automatically on first boot and only when empty.
 - **MongoDB Atlas** stores all collections plus the `sessions` collection
   (auto-expiring via a TTL index).
 
-Cookies are `SameSite=None; Secure` in production and the API whitelists the
-frontend origin, so the browser happily sends the session cookie cross-site.
-Login rate limiting is in-memory — fine for Render's single instance.
+Because the SPA and API share the Vercel origin, session cookies are
+**first-party** — they work in every browser and on every phone, including
+Safari/Chrome's third-party cookie blocking. (Cookies are still
+`SameSite=None; Secure` in production, which is harmless same-site.) Login
+rate limiting is in-memory — fine for Render's single instance.
 
 ### Runtime config / env vars
 
@@ -69,7 +75,7 @@ Login rate limiting is in-memory — fine for Render's single instance.
 | `MONGODB_DB` | optional | Override the database name (defaults to the name in the URI, else `wealthhabit`) |
 | `SESSION_SECRET` | Render (required in prod) | Signs session cookies. Without it a random secret is used per boot |
 | `ALLOWED_ORIGINS` | Render | Comma-separated SPA origins, e.g. `https://wealthhabit.vercel.app`. Same-origin requests always pass |
-| `API_BASE_URL` | Render + Vercel | Full URL of the Render API, e.g. `https://wealthhabit-api.onrender.com`. Served to the SPA via `/config.js`; empty = same-origin |
+| `API_BASE_URL` | optional | No longer needed — the Vercel SPA is same-origin via the `/api/*` proxy. Left over from the old cross-origin setup; safe to leave set or delete |
 | `PORT` | Render | Render injects this automatically; local default is 3000 |
 | `NODE_ENV` | Render | `production` (enables Secure + SameSite=None cookies) |
 
@@ -121,23 +127,22 @@ npm run seed        # wipe all collections and re-seed fresh demo data
    - `SESSION_SECRET` (long random string)
    - `ALLOWED_ORIGINS` → `https://<your-vercel-app>.vercel.app`
    - `NODE_ENV` → `production`
-   - `API_BASE_URL` → `https://<your-render-app>.onrender.com`
 5. Deploy, then confirm `https://<your-render-app>.onrender.com/config.js`
-   prints `window.APP_API_BASE = "https://<your-render-app>.onrender.com";`.
+   prints `window.APP_API_BASE = "";`.
 
 ### 3. Vercel (frontend)
 
 1. Vercel dashboard → **Add New → Project**, connect the same repo.
 2. **Root Directory: `public`** (this folder contains the SPA plus
    `vercel.json` and the `api/config.js` lambda).
-3. **Environment Variables** → add `API_BASE_URL` with the Render URL from
-   step 2 (no trailing slash).
-4. Deploy. Open the site — the SPA loads `/config.js` from Vercel and calls the
-   Render API with your session cookie.
+3. Deploy — no environment variables are needed. The `/api/*` proxy in
+   `vercel.json` already points at your Render service.
+4. Open the site — the SPA loads `/config.js` (same-origin) and every API call
+   goes through Vercel to Render with a first-party session cookie.
 
-> Changing domains later? Update `API_BASE_URL` on Vercel *and*
-> `ALLOWED_ORIGINS` on Render, then redeploy. Cookie-based auth needs the two
-> to agree.
+> Changed your Render URL? Update the `/api/*` destination inside
+> `public/vercel.json` (and `ALLOWED_ORIGINS` on Render), commit, and push —
+> Vercel redeploys automatically.
 
 ### Verify
 
@@ -206,8 +211,8 @@ wealthhabit/
 │
 └── public/                       # ── SPA (Vercel, Root Directory = public) ──
     ├── index.html                # Single page shell that loads all JS below
-    ├── vercel.json               # Rewrites /config.js → /api/config (lambda)
-    ├── api/config.js             # Vercel lambda: serves window.APP_API_BASE
+    ├── vercel.json               # /config.js → lambda; /api/* → Render proxy
+    ├── api/config.js             # Vercel lambda: APP_API_BASE = "" (same origin)
     ├── css/styles.css            # Entire dark, responsive design system
     └── js/
         ├── api.js                # Fetch wrapper (configurable API base, 401 redirect)
@@ -234,8 +239,8 @@ wealthhabit/
 | `src/helpers.js` | Category/type/currency constants plus shared validation (`cleanStr`, `parseAmountCents`, `isValidDate`, email checks). |
 | `src/middleware.js` | `requireAuth` / `requireAdmin` guards, `cors()` + `sameOrigin()` CSRF (with `ALLOWED_ORIGINS` allow-list), per-email login rate limiter, `wrap()` for async handlers. |
 | `src/analytics.js` | Pure aggregations used by dashboard & wealth routes: latest per-account net worth, month-by-month net-worth series, monthly income/expense totals, spending breakdown, month list. |
-| `public/api/config.js` | Vercel lambda answering `/config.js` with `window.APP_API_BASE` from the `API_BASE_URL` env var. |
-| `public/vercel.json` | Maps `/config.js` to that lambda. The Express server answers the same path itself, so local dev and direct Render access work with no Vercel. |
+| `public/api/config.js` | Vercel lambda answering `/config.js` with `window.APP_API_BASE = ""` (same origin — Vercel proxies `/api/*` to Render). |
+| `public/vercel.json` | Maps `/config.js` to that lambda and proxies `/api/:path*` to the Render API. The Express server answers `/config.js` itself, so local dev and direct Render access work with no Vercel. |
 | `public/js/api.js` | One `api()` fetch helper: reads `window.APP_API_BASE` from `/config.js`, sends credentials cross-site, throws server errors, redirects to login on 401. |
 
 **Naming convention:** every screen under `public/js/pages/` has a matching API

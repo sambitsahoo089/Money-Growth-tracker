@@ -70,14 +70,14 @@ async function main() {
 
   /* ------------------- Runtime config for the SPA -------------------- */
   // The SPA reads window.APP_API_BASE before any fetch. Empty string means
-  // "same origin as this page" (Render serving the SPA itself, or local dev).
-  // When the SPA is hosted on Vercel, its /config.js lambda supplies the
-  // Render API URL via the API_BASE_URL env var instead.
+  // "same origin as this page", which is always correct: local dev and the
+  // Render-served SPA share an origin, and on Vercel vercel.json proxies
+  // /api/* to this server so the browser stays on the Vercel origin.
   app.get('/config.js', (req, res) => {
     res
       .type('application/javascript')
       .set('Cache-Control', 'no-store')
-      .send(`window.APP_API_BASE = ${JSON.stringify(process.env.API_BASE_URL || '')};\n`);
+      .send('window.APP_API_BASE = "";\n');
   });
 
   /* ---------------------------- Static SPA ---------------------------- */
@@ -97,7 +97,7 @@ async function main() {
 
   app.listen(PORT, () => {
     console.log(`WealthHabit running → http://localhost:${PORT}`);
-    if (PRODUCTION) console.log(`  API base for the hosted SPA (set as API_BASE_URL on Vercel): ${process.env.API_BASE_URL || '(this server — same origin)'}`);
+    if (PRODUCTION) console.log('  SPA talks to this API same-origin (Vercel proxies /api/* here).');
   });
 }
 

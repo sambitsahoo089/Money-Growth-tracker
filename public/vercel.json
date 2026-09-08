@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
-    { "source": "/config.js", "destination": "/api/config" }
+    { "source": "/config.js", "destination": "/api/config" },
+    {
+      "source": "/api/:path*",
+      "destination": "https://money-growth-tracker.onrender.com/api/:path*"
+    }
   ]
 }
