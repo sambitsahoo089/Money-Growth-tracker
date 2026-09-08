@@ -140,10 +140,8 @@ Open `https://<your-render-app>.onrender.com` on your phone and desktop:
 - **Sessions**: httpOnly cookies (`SameSite=None; Secure` in production),
   stored in MongoDB with a 7-day TTL index. Signing secret via `SESSION_SECRET`.
 - **CSRF**: every state-changing request is rejected unless the
-  `Origin`/`Referer` host matches the server host *or* a configured approved
-  origin. In a Render-only setup the frontend and API are the same origin, so
-  requests always pass; `ALLOWED_ORIGINS` only matters if you add another host
-  later (e.g. a Vercel copy).
+  `Origin`/`Referer` host matches the server host. In a Render-only setup the
+  frontend and API are the same origin, so requests always pass.
 - **CORS**: preflights and credential headers are handled for approved origins
   (see `cors()` in `src/middleware.js`); same-origin requests always pass.
 - **Rate limiting**: sign-in attempts are limited per email + IP (8 tries /
@@ -224,8 +222,8 @@ wealthhabit/
 | `src/helpers.js` | Category/type/currency constants plus shared validation (`cleanStr`, `parseAmountCents`, `isValidDate`, email checks). |
 | `src/middleware.js` | `requireAuth` / `requireAdmin` guards, `cors()` + `sameOrigin()` CSRF (with `ALLOWED_ORIGINS` allow-list), per-email login rate limiter, `wrap()` for async handlers. |
 | `src/analytics.js` | Pure aggregations used by dashboard & wealth routes: latest per-account net worth, month-by-month net-worth series, monthly income/expense totals, spending breakdown, month list. |
-| `public/api/config.js` | Serves `/config.js` (returning `window.APP_API_BASE = ""`) for both Render and the standalone `config.js` route. Also served directly by the Express app, so there's no separate Vercel host needed. |
-| `public/vercel.json` | Not used in a Render-only deploy — kept in the repo only so a Vercel copy can be re-added later. Render ignores it. |
+| `public/api/config.js` | Serves `/config.js` (returning `window.APP_API_BASE = ""`) — also served directly by the Express app, so there's no separate frontend host needed. |
+| `public/vercel.json` | Not used in a Render-only deploy — kept in the repo only so a separate frontend host can be re-added later. Render ignores it. |
 | `public/js/api.js` | One `api()` fetch helper: reads `window.APP_API_BASE` from `/config.js`, sends credentials cross-site, throws server errors, redirects to login on 401. |
 
 **Naming convention:** every screen under `public/js/pages/` has a matching API
