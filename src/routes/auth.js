@@ -15,6 +15,18 @@ const router = express.Router();
 const PASSWORD_RE = /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/;
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** Precomputed bcrypt hash of the seeded admin password, resolved once at boot.
+ *  Login compares the supplied password against this single stored hash — no
+ *  per-request hashing of SEED_ADMIN_PASSWORD and no bcrypt work for any other
+ *  email. If bcrypt fails to load on a platform, login still rejects safely. */
+let ADMIN_PASSWORD_HASH = null;
+try {
+  ADMIN_PASSWORD_HASH = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
+} catch (e) {
+  // If bcrypt isn't usable here, the admin account can't authenticate.
+  console.error('WealthHabit: bcrypt could not hash the admin password at boot:', e.message);
+}
+
 function publicUser(u) {
   return {
     id: String(u._id),
@@ -76,7 +88,8 @@ router.post('/login', loginRateLimit, wrap(async (req, res) => {
 
   // Admin-only mode: only the seeded admin account may sign in.
   if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()
-      || !bcrypt.compareSync(password, bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10))) {
+      || !ADMIN_PASSWORD_HASH
+      || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
     recordLoginFailure(req);
     return bad(res, 'That account is not recognized. The admin account is the only sign-in on this deployment.');
   }
