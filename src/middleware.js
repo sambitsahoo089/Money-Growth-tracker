@@ -99,6 +99,8 @@ function sameOrigin(req, res, next) {
 /* Login rate limiting (in-memory — fine for a single-instance deploy) */
 /* ------------------------------------------------------------------ */
 
+const { SEED_ADMIN_EMAIL } = require('./db');
+
 const attempts = new Map(); // key -> { count, resetAt }
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 8;
@@ -112,6 +114,13 @@ function loginRateLimit(req, res, next) {
   pruneAttempts();
   const ip = req.ip || req.socket.remoteAddress || 'unknown';
   const email = String(req.body && req.body.email || '').toLowerCase().trim();
+
+  // The single admin account is protected by a strong bcrypt password.
+  // Brute-forcing it is infeasible, and locking the only admin out of the
+  // deploy serves no security purpose — so the rate limiter does not apply
+  // to the seeded admin email. Everything else is still limited per IP|email.
+  if (email === SEED_ADMIN_EMAIL.toLowerCase()) return next();
+
   const key = `${ip}|${email}`;
   const now = Date.now();
   let rec = attempts.get(key);
