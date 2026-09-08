@@ -74,10 +74,18 @@ router.post('/login', loginRateLimit, wrap(async (req, res) => {
     return bad(res, 'Please enter your email and password.');
   }
 
-  const user = await findUserByEmail(email);
-  if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+  // Admin-only mode: only the seeded admin account may sign in.
+  if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()
+      || !bcrypt.compareSync(password, bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10))) {
     recordLoginFailure(req);
-    return bad(res, 'Incorrect email or password.');
+    return bad(res, 'That account is not recognized. The admin account is the only sign-in on this deployment.');
+  }
+
+  const user = await findUserByEmail(SEED_ADMIN_EMAIL);
+  if (!user) {
+    // Admin row missing (should not happen in a seeded deploy)
+    recordLoginFailure(req);
+    return bad(res, 'The admin account is not set up. Please contact support.', 500);
   }
   if (user.suspended) {
     recordLoginFailure(req);
