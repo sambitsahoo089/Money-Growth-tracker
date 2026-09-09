@@ -119,9 +119,17 @@ router.post('/client/login', loginRateLimit, wrap(async (req, res) => {
   }
 
   const user = await findUserByEmail(email);
-  if (!user || user.role !== 'client' || !bcrypt.compareSync(password, user.password_hash)) {
+  if (!user) {
     recordLoginFailure(req);
-    return bad(res, 'Wrong email or password. Check your details and try again.');
+    return bad(res, 'No account found with this email. Please create an account first.');
+  }
+  if (user.role !== 'client') {
+    recordLoginFailure(req);
+    return bad(res, 'This email belongs to the admin account — sign in using the Admin tab.');
+  }
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    recordLoginFailure(req);
+    return bad(res, 'Wrong password. Check your details and try again.');
   }
   if (user.suspended) {
     recordLoginFailure(req);
