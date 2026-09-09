@@ -73,12 +73,12 @@ const AuthPage = {
         <form id="auth-form" novalidate>
           <div class="field">
             <label for="email">Admin email</label>
-            <input class="input" type="email" id="email" name="email" value="sambitkusahoo089@gmail.com" readonly tabindex="-1" autocomplete="email" required>
+            <input class="input" type="email" id="email" name="email" placeholder="Enter the admin email" autocomplete="email" required>
             <div class="field-error"></div>
           </div>
           <div class="field">
             <label for="password">Password</label>
-            <input class="input" type="password" id="password" name="password" placeholder="sam@1234" autocomplete="current-password" required>
+            <input class="input" type="password" id="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
             <div class="field-error"></div>
           </div>
           <button class="btn block" type="submit" id="submit-btn">Sign in to Admin Panel</button>
