@@ -163,7 +163,7 @@ const AuthPage = {
         const payload = isRegister
           ? { name: form.name.value.trim(), email, password, currency: form.currency.value }
           : { email, password };
-        const path = isRegister ? '/api/auth/register' : this.role === 'admin' ? '/api/admin/login' : '/api/client/login';
+        const path = isRegister ? '/api/auth/register' : this.role === 'admin' ? '/api/auth/admin/login' : '/api/auth/client/login';
         const data = await api(path, { method: 'POST', body: payload });
         App.me = data.user;
         App.currency = data.user.currency;
