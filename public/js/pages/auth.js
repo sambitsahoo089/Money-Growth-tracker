@@ -23,7 +23,7 @@ const AuthPage = {
               <li><span class="f-ico">🎯</span><div><b>Reach savings goals</b><small>Emergency fund, trips, big purchases — one goal at a time</small></div></li>
               <li><span class="f-ico">📈</span><div><b>Grow your net worth</b><small>Assets, income &amp; spending analytics in one dashboard</small></div></li>
             </ul>
-            <p class="hero-foot">Sign in as a <b>Client</b> to manage your finances, or use the <b>Admin</b> tab for platform control.</p>
+            <p class="hero-foot">Sign in as a <b>Client</b> to manage your finances.</p>
           </div>
           <div class="auth-card">
           <div class="brand-big">
