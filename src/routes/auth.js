@@ -15,17 +15,6 @@ const router = express.Router();
 const PASSWORD_RE = /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/;
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Precomputed bcrypt hash of the seeded admin password, resolved once at boot.
- *  The admin tab compares the supplied password against this single stored hash —
- *  no per-request hashing of SEED_ADMIN_PASSWORD and no bcrypt work for any other
- *  email. If bcrypt fails to load on a platform, the admin account can't auth. */
-let ADMIN_PASSWORD_HASH = null;
-try {
-  ADMIN_PASSWORD_HASH = bcrypt.hashSync(SEED_ADMIN_PASSWORD, 10);
-} catch (e) {
-  console.error('WealthHabit: bcrypt could not hash the admin password at boot:', e.message);
-}
-
 function publicUser(u) {
   return {
     id: String(u._id),
@@ -87,15 +76,17 @@ router.post('/admin/login', loginRateLimit, wrap(async (req, res) => {
     return bad(res, 'Please enter your email and password.');
   }
 
-  if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()
-      || !ADMIN_PASSWORD_HASH
-      || !bcrypt.compareSync(password, ADMIN_PASSWORD_HASH)) {
+  // Only the single seeded admin email may sign in here — everything else is
+  // rejected as wrong credentials. The password is checked against the admin's
+  // own stored hash (same account the session will use), so no boot-time
+  // hashing or extra bcrypt work happens for any other email.
+  if (email.toLowerCase() !== SEED_ADMIN_EMAIL.toLowerCase()) {
     return bad(res, 'Wrong login credentials. The admin panel accepts only the provisioned admin account.');
   }
 
   const user = await findUserByEmail(SEED_ADMIN_EMAIL);
-  if (!user) {
-    return bad(res, 'The admin account is not set up. Please contact support.', 500);
+  if (!user || user.role !== 'admin' || !bcrypt.compareSync(password, user.password_hash)) {
+    return bad(res, 'Wrong login credentials. The admin panel accepts only the provisioned admin account.');
   }
   if (user.suspended) {
     return bad(res, 'This account has been suspended. Contact support@freebuff.app.', 403);
