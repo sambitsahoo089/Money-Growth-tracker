@@ -44,7 +44,6 @@ const AuthPage = {
 
           <div class="demo-box">
             <b>Demo credentials</b>
-            <div class="row"><span>Admin (single account)</span><code>sambitkusahoo089@gmail.com / sam@1234</code></div>
             <div class="row"><span>Demo client</span><code>alex@example.com / DemoPass1</code></div>
           </div>
         </div>
