@@ -12,7 +12,20 @@ const AuthPage = {
     const app = document.getElementById('app');
     app.innerHTML = `
       <div class="auth-root">
-        <div class="auth-card">
+        <div class="auth-shell">
+          <div class="auth-hero">
+            <div class="hero-badge">💰 Money Growth Tracker</div>
+            <h2>Build the habits.<br>Watch the wealth grow.</h2>
+            <p class="hero-sub">WealthHabit is a personal finance &amp; habit tracker that turns small, consistent habits into real financial growth.</p>
+            <ul class="hero-features">
+              <li><span class="f-ico">🧾</span><div><b>Track every expense</b><small>See exactly where your money goes each month</small></div></li>
+              <li><span class="f-ico">🔥</span><div><b>Build money habits</b><small>Daily streaks and reminders that keep you consistent</small></div></li>
+              <li><span class="f-ico">🎯</span><div><b>Reach savings goals</b><small>Emergency fund, trips, big purchases — one goal at a time</small></div></li>
+              <li><span class="f-ico">📈</span><div><b>Grow your net worth</b><small>Assets, income &amp; spending analytics in one dashboard</small></div></li>
+            </ul>
+            <p class="hero-foot">Sign in as a <b>Client</b> to manage your finances, or use the <b>Admin</b> tab for platform control.</p>
+          </div>
+          <div class="auth-card">
           <div class="brand-big">
             <img class="logo" src="/logo.png" alt="WealthHabit logo">
             <div>
@@ -42,9 +55,10 @@ const AuthPage = {
               </div>`}
           <div id="auth-body"></div>
 
-          <div class="demo-box">
-            <b>Demo credentials</b>
-            <div class="row"><span>Demo client</span><code>alex@example.com / DemoPass1</code></div>
+            <div class="demo-box">
+              <b>Demo credentials</b>
+              <div class="row"><span>Demo client</span><code>alex@example.com / DemoPass1</code></div>
+            </div>
           </div>
         </div>
       </div>`;

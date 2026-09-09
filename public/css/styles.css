@@ -438,6 +438,50 @@ table.data tbody tr:hover { background: rgba(255, 255, 255, .025); }
     radial-gradient(700px 440px at -10% 110%, rgba(168, 85, 247, .14), transparent 60%),
     #0a0f1c;
 }
+.auth-shell {
+  display: grid;
+  gap: 30px;
+  width: 100%;
+  max-width: 960px;
+  align-items: center;
+}
+@media (min-width: 900px) {
+  .auth-shell { grid-template-columns: 1.05fr 0.95fr; gap: 48px; }
+}
+
+/* Left column — project description, shown on desktop only */
+.auth-hero { display: none; }
+@media (min-width: 900px) {
+  .auth-hero { display: block; text-align: left; }
+  .auth-hero .hero-badge {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: var(--primary-soft); color: #c7d2fe;
+    border: 1px solid rgba(129, 140, 248, .35);
+    border-radius: 30px; padding: 6px 14px;
+    font-size: 12.5px; font-weight: 800; letter-spacing: .02em;
+    margin-bottom: 20px;
+  }
+  .auth-hero h2 {
+    font-size: 38px; line-height: 1.15; letter-spacing: -.03em;
+    margin-bottom: 14px;
+  }
+  .auth-hero .hero-sub {
+    color: var(--muted); font-size: 15.5px;
+    max-width: 46ch; margin-bottom: 26px;
+  }
+  .auth-hero .hero-features { list-style: none; display: grid; gap: 15px; margin-bottom: 26px; }
+  .auth-hero .hero-features li { display: flex; gap: 12px; align-items: flex-start; }
+  .auth-hero .f-ico {
+    width: 40px; height: 40px; border-radius: 11px; flex: none;
+    background: var(--card); border: 1px solid var(--border-soft);
+    display: grid; place-items: center; font-size: 19px;
+  }
+  .auth-hero .hero-features b { display: block; font-size: 14.5px; }
+  .auth-hero .hero-features small { color: var(--muted); font-size: 13px; }
+  .auth-hero .hero-foot { color: var(--muted); font-size: 13px; }
+  .auth-hero .hero-foot b { color: #c7d2fe; }
+}
+
 .auth-card {
   width: 100%; max-width: 420px;
   background: var(--panel);
